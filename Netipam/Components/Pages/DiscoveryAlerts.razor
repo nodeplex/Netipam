@@ -1,0 +1,257 @@
+@page "/alerts/discovery"
+@rendermode InteractiveServer
+
+@using MudBlazor
+@using Microsoft.EntityFrameworkCore
+@using Netipam.Data
+@using Netipam.Unifi
+
+@inject AppDbContext DbContext
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+
+<MudStack Spacing="2">
+
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                       Title="Back to Dashboard"
+                       OnClick="@(() => Nav.NavigateTo("/"))" />
+        <MudText Typo="Typo.h5">New clients/devices</MudText>
+        <MudSpacer />
+        <MudButton Variant="Variant.Outlined" OnClick="Reload">Refresh</MudButton>
+    </MudStack>
+
+    <MudTable T="ClientDiscoveryAlert"
+              Items="alerts"
+              Dense="true"
+              Hover="true"
+              Bordered="true"
+              Striped="true">
+
+        <HeaderContent>
+            <MudTh>Client</MudTh>
+            <MudTh>IP</MudTh>
+            <MudTh>Conn</MudTh>
+            <MudTh>Upstream</MudTh>
+            <MudTh style="width:200px;">Detected</MudTh>
+            <MudTh style="width:200px;"></MudTh>
+        </HeaderContent>
+
+        <RowTemplate Context="a">
+            <MudTd>
+                <MudStack Spacing="0">
+                    <MudText Typo="Typo.body2">@Safe(a.Name)</MudText>
+                    <MudText Typo="Typo.caption">@Safe(a.Hostname)</MudText>
+                    <MudText Typo="Typo.caption">@Safe(a.Mac)</MudText>
+                </MudStack>
+            </MudTd>
+
+            <MudTd>@Safe(a.IpAddress)</MudTd>
+            <MudTd>@Safe(a.ConnectionType)</MudTd>
+            <MudTd>@Safe(a.UpstreamDeviceName)</MudTd>
+            <MudTd>@FormatAbsRel(a.DetectedAtUtc)</MudTd>
+
+            <MudTd>
+                <MudStack Row="true" Spacing="1">
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               Size="Size.Small"
+                               Disabled="@ackBusy"
+                               OnClick="@(() => AddDiscovery(a.Id, editBeforeAdd: false))">
+                        Add
+                    </MudButton>
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Primary"
+                               Size="Size.Small"
+                               Disabled="@ackBusy"
+                               OnClick="@(() => AddDiscovery(a.Id, editBeforeAdd: true))">
+                        Edit & Add
+                    </MudButton>
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Error"
+                               Size="Size.Small"
+                               Disabled="@ackBusy"
+                               OnClick="@(() => IgnoreDiscovery(a.Id))">
+                        Ignore
+                    </MudButton>
+                </MudStack>
+            </MudTd>
+        </RowTemplate>
+
+        <NoRecordsContent>
+            <MudText Typo="Typo.body2" Class="pa-4">No unacknowledged discovery alerts.</MudText>
+        </NoRecordsContent>
+    </MudTable>
+
+</MudStack>
+
+@code {
+    private bool ackBusy;
+    private List<ClientDiscoveryAlert> alerts = new();
+
+    protected override async Task OnInitializedAsync()
+        => await Reload();
+
+    private async Task Reload()
+    {
+        var ignoredMacs = await DbContext.IgnoredDiscoveryMacs
+            .AsNoTracking()
+            .Select(i => i.Mac)
+            .ToListAsync();
+        var ignoredSet = new HashSet<string>(ignoredMacs, StringComparer.OrdinalIgnoreCase);
+
+        alerts = await DbContext.ClientDiscoveryAlerts
+            .AsNoTracking()
+            .Where(a => !a.IsAcknowledged)
+            .OrderByDescending(a => a.DetectedAtUtc)
+            .ToListAsync();
+
+        alerts = alerts
+            .Where(a => !ignoredSet.Contains(a.Mac))
+            .ToList();
+    }
+
+    private async Task AddDiscovery(int alertId, bool editBeforeAdd)
+    {
+        if (ackBusy) return;
+        ackBusy = true;
+
+        try
+        {
+            var alert = await DbContext.ClientDiscoveryAlerts
+                .AsNoTracking()
+                .FirstOrDefaultAsync(a => a.Id == alertId);
+
+            if (alert is null)
+                return;
+
+            Device? device = null;
+            if (editBeforeAdd)
+            {
+                var parameters = new DialogParameters
+                {
+                    { "Alert", alert }
+                };
+
+                var dialog = DialogService.Show<NewDiscoveryDeviceDialog>(
+                    "Add discovered device",
+                    parameters,
+                    new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+                var result = await dialog.Result;
+                if (result.Canceled || result.Data is not Device edited)
+                    return;
+
+                device = edited;
+                device.MacAddress = string.IsNullOrWhiteSpace(device.MacAddress)
+                    ? UnifiParsers.NormalizeMac(alert.Mac)
+                    : UnifiParsers.NormalizeMac(device.MacAddress);
+                device.UpstreamDeviceMac = string.IsNullOrWhiteSpace(device.UpstreamDeviceMac)
+                    ? null
+                    : UnifiParsers.NormalizeMac(device.UpstreamDeviceMac);
+            }
+            else
+            {
+                device = new Device
+                {
+                    Name = alert.Name ?? alert.Mac,
+                    Hostname = alert.Hostname,
+                    MacAddress = UnifiParsers.NormalizeMac(alert.Mac),
+                    IpAddress = alert.IpAddress,
+                    ConnectionType = alert.ConnectionType,
+                    ConnectionDetail = alert.ConnectionDetail,
+                    UpstreamDeviceName = alert.UpstreamDeviceName,
+                    UpstreamDeviceMac = string.IsNullOrWhiteSpace(alert.UpstreamDeviceMac) ? null : UnifiParsers.NormalizeMac(alert.UpstreamDeviceMac),
+                    UpstreamConnection = alert.UpstreamConnection,
+                    IsOnline = alert.IsOnline
+                };
+            }
+
+            device.MacAddress = string.IsNullOrWhiteSpace(device.MacAddress)
+                ? UnifiParsers.NormalizeMac(alert.Mac)
+                : UnifiParsers.NormalizeMac(device.MacAddress);
+
+            var exists = await DbContext.Devices
+                .AnyAsync(d => d.MacAddress == device.MacAddress);
+            if (!exists)
+            {
+                DbContext.Devices.Add(device);
+            }
+
+            var entity = await DbContext.ClientDiscoveryAlerts
+                .FirstOrDefaultAsync(a => a.Id == alertId);
+
+            if (entity is not null)
+            {
+                entity.IsAcknowledged = true;
+                entity.AcknowledgedAtUtc = DateTime.UtcNow;
+            }
+
+            await DbContext.SaveChangesAsync();
+            await Reload();
+        }
+        finally
+        {
+            ackBusy = false;
+        }
+    }
+
+    private async Task IgnoreDiscovery(int alertId)
+    {
+        if (ackBusy) return;
+        ackBusy = true;
+
+        try
+        {
+            var alert = await DbContext.ClientDiscoveryAlerts
+                .FirstOrDefaultAsync(a => a.Id == alertId);
+
+            if (alert is null)
+                return;
+
+            var mac = UnifiParsers.NormalizeMac(alert.Mac);
+            if (!string.IsNullOrWhiteSpace(mac))
+            {
+                var exists = await DbContext.IgnoredDiscoveryMacs
+                    .AnyAsync(i => i.Mac == mac);
+
+                if (!exists)
+                {
+                    DbContext.IgnoredDiscoveryMacs.Add(new IgnoredDiscoveryMac
+                    {
+                        Mac = mac,
+                        IgnoredAtUtc = DateTime.UtcNow,
+                        Source = "Dashboard"
+                    });
+                }
+            }
+
+            alert.IsAcknowledged = true;
+            alert.AcknowledgedAtUtc = DateTime.UtcNow;
+
+            await DbContext.SaveChangesAsync();
+            await Reload();
+        }
+        finally
+        {
+            ackBusy = false;
+        }
+    }
+
+    private static string FormatAbsRel(DateTime utc)
+    {
+        var local = DateTime.SpecifyKind(utc, DateTimeKind.Utc).ToLocalTime();
+        var abs = local.ToString("MM-dd-yyyy HH:mm");
+        var rel = ToRelative(DateTime.UtcNow - utc);
+        return $"{abs} ({rel})";
+    }
+
+    private static string ToRelative(TimeSpan age)
+    {
+        if (age < TimeSpan.Zero) age = TimeSpan.Zero;
+        if (age.TotalSeconds < 60) return "just now";
+        if (age.TotalMinutes < 60) return $"{(int)age.TotalMinutes}m ago";
+        if (age.TotalHours < 48) return $"{(int)age.TotalHours}h ago";
+        return $"{(int)age.TotalDays}d ago";
+    }
+}

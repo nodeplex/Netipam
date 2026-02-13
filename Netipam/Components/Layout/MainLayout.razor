@@ -1,0 +1,706 @@
+﻿@inherits LayoutComponentBase
+@implements IDisposable
+
+@using MudBlazor
+@using System.Reflection
+@using Netipam.Services
+@using Netipam.Data
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject AppSettingsService SettingsService
+@inject AuthenticationStateProvider AuthStateProvider
+
+<MudThemeProvider Theme="@_currentTheme" IsDarkMode="@_isDarkMode" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+<MudLayout>
+
+    <MudAppBar Elevation="1" Dense="true">
+        <MudIconButton Icon="@Icons.Material.Filled.Menu"
+                       Color="Color.Inherit"
+                       Edge="Edge.Start"
+                       OnClick="ToggleDrawer" />
+
+        <MudText Typo="Typo.subtitle1" Class="ms-2">
+            @_siteTitle
+        </MudText>
+
+        <MudSpacer />
+
+        <AuthorizeView>
+            <Authorized>
+                <MudMenu AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
+                    <ActivatorContent>
+                        <MudIconButton Icon="@Icons.Material.Filled.Settings"
+                                       Color="Color.Inherit"
+                                       Title="Configuration" />
+                    </ActivatorContent>
+                    <ChildContent>
+                        @if (!_isViewer)
+                        {
+                            <MudMenuItem Href="/settings" Icon="@Icons.Material.Filled.Settings">Settings</MudMenuItem>
+                        }
+                        <MudMenuItem Href="/client-types" Icon="@Icons.Material.Filled.Category">Client Types</MudMenuItem>
+                        <MudMenuItem Href="/locations" Icon="@Icons.Material.Filled.Place">Locations</MudMenuItem>
+                        <MudMenuItem Href="/racks" Icon="@Icons.Material.Filled.ViewInAr">Racks</MudMenuItem>
+                        <AuthorizeView Roles="Admin" Context="adminAuth">
+                            <MudMenuItem Href="/admin/users" Icon="@Icons.Material.Filled.SupervisedUserCircle">Users</MudMenuItem>
+                        </AuthorizeView>
+                    </ChildContent>
+                </MudMenu>
+            </Authorized>
+        </AuthorizeView>
+
+        <MudIconButton Icon="@(_isDarkMode? Icons.Material.Filled.DarkMode : Icons.Material.Filled.LightMode)"
+                       Color="Color.Inherit"
+                       Title="@(_isDarkMode ? "Dark mode" : "Light mode")"
+                       OnClick="ToggleDarkMode" />
+    </MudAppBar>
+
+    <MudDrawer Elevation="1"
+               Variant="DrawerVariant.Mini"
+               Open="@drawerOpen"
+               MiniVariantWidth="56px"
+               Width="160px"
+               ClipMode="DrawerClipMode.Always">
+
+        <NavMenu />
+    </MudDrawer>
+
+    <MudMainContent Class="pa-2 pt-14">
+        @Body
+    </MudMainContent>
+
+</MudLayout>
+
+@code {
+    private bool drawerOpen = true;
+
+    private bool _isDarkMode;
+    private string _siteTitle = "Netipam"; // safe fallback
+    private AppSetting? _settings;
+    private bool _isViewer;
+
+    private MudTheme _currentTheme = Default;
+    private readonly MudTheme _theme = new MudTheme()
+    {
+        LayoutProperties = new LayoutProperties
+        {
+            DefaultBorderRadius = "6px"
+        }
+    };
+
+    public sealed record ThemeOption(string Name, string DisplayName, MudTheme Theme);
+
+    private static readonly Dictionary<string, string> ThemeErrors = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Lazy<IReadOnlyList<ThemeOption>> ThemeOptions = new(BuildThemeOptions);
+
+    public static IReadOnlyList<ThemeOption> GetThemeOptions() => ThemeOptions.Value;
+    public static IReadOnlyDictionary<string, string> GetThemeErrors() => ThemeErrors;
+
+    public static string NormalizeThemeName(string? name)
+    {
+        var options = ThemeOptions.Value;
+        var defaultName = options.FirstOrDefault(o => o.Name.Equals("Default", StringComparison.OrdinalIgnoreCase))?.Name
+                          ?? options.First().Name;
+
+        if (string.IsNullOrWhiteSpace(name))
+            return defaultName;
+
+        var match = ThemeOptions.Value.FirstOrDefault(o => o.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        return match?.Name ?? defaultName;
+    }
+
+    public static MudTheme ResolveTheme(string? name)
+    {
+        var normalized = NormalizeThemeName(name);
+        return ThemeOptions.Value.First(o => o.Name.Equals(normalized, StringComparison.OrdinalIgnoreCase)).Theme;
+    }
+
+    private static IReadOnlyList<ThemeOption> BuildThemeOptions()
+    {
+        var list = typeof(MainLayout)
+            .GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where(f => f.FieldType == typeof(MudTheme))
+            .Select(f =>
+            {
+                var theme = f.GetValue(null) as MudTheme;
+                return theme is null ? null : new ThemeOption(f.Name, ToDisplayName(f.Name), theme);
+            })
+            .Where(t => t is not null)
+            .Cast<ThemeOption>()
+            .Where(o => !ThemeErrors.ContainsKey(o.Name))
+            .OrderBy(o => o.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (list.Count == 0)
+            list.Add(new ThemeOption("Default", "Default", new MudTheme()));
+
+        return list;
+    }
+
+    private static MudTheme SafeTheme(string name, Func<MudTheme> builder)
+    {
+        try
+        {
+            return builder();
+        }
+        catch (Exception ex)
+        {
+            ThemeErrors[name] = ex.Message;
+            return new MudTheme();
+        }
+    }
+
+    private static string ToDisplayName(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return "Theme";
+
+        var name = raw;
+        if (name.EndsWith("theme", StringComparison.OrdinalIgnoreCase))
+            name = name[..^5];
+
+        return string.IsNullOrWhiteSpace(name) ? raw : name;
+    }
+
+
+    protected override async Task OnInitializedAsync()
+    {
+        SettingsService.SettingsChanged += OnSettingsChanged;
+
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        _isViewer = authState.User.IsInRole("Viewer");
+
+        _settings = await SettingsService.LoadAsync();
+        ApplySettings(_settings);
+    }
+
+    private void OnSettingsChanged(AppSetting s)
+    {
+        _settings = s;
+        ApplySettings(s);
+
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void ApplySettings(AppSetting s)
+    {
+        _isDarkMode = s.DarkMode;
+        _currentTheme = ResolveTheme(s.ThemeName);
+        _siteTitle = string.IsNullOrWhiteSpace(s.SiteTitle)
+            ? "Netipam"
+            : s.SiteTitle;
+    }
+
+    private void ToggleDrawer() => drawerOpen = !drawerOpen;
+
+    private async Task ToggleDarkMode()
+    {
+        _isDarkMode = !_isDarkMode;
+        await SettingsService.UpdateAsync(s => s.DarkMode = _isDarkMode);
+    }
+
+    public void Dispose()
+    {
+        SettingsService.SettingsChanged -= OnSettingsChanged;
+    }
+
+
+
+
+
+    /*
+MudBlazor Default Theme
+    */
+    public static readonly MudTheme Default = SafeTheme(nameof(Default), () => new MudTheme()
+    {
+        PaletteLight = new PaletteLight()
+        {
+            PrimaryContrastText = "rgba(255,255,255,1)",
+            SecondaryContrastText = "rgba(255,255,255,1)",
+            SecondaryDarken = "rgb(255,31,105)",
+            SecondaryLighten = "rgb(255,102,153)",
+            Secondary = "rgba(255,64,129,1)",
+            TertiaryContrastText = "rgba(255,255,255,1)",
+            TertiaryLighten = "rgb(42,223,187)",
+            Tertiary = "rgba(30,200,165,1)",
+            TertiaryDarken = "rgb(25,169,140)",
+            InfoContrastText = "rgba(255,255,255,1)",
+            SuccessContrastText = "rgba(255,255,255,1)",
+            WarningContrastText = "rgba(255,255,255,1)",
+            ErrorContrastText = "rgba(255,255,255,1)",
+            DarkContrastText = "rgba(255,255,255,1)",
+            GrayDark = "#757575",
+            White = "rgba(255,255,255,1)",
+            OverlayLight = "rgba(255,255,255,0.4980392156862745)",
+            OverlayDark = "rgba(33,33,33,0.4980392156862745)",
+            GrayDarker = "#616161",
+            TableHover = "rgba(0,0,0,0.0392156862745098)",
+            GrayLighter = "#E0E0E0",
+            GrayLight = "#BDBDBD",
+            GrayDefault = "#9E9E9E",
+            RippleOpacitySecondary = 0.2,
+            RippleOpacity = 0.1,
+            HoverOpacity = 0.06,
+            Surface = "rgba(255,255,255,1)",
+            Background = "rgba(255,255,255,1)",
+            Info = "rgba(33,150,243,1)",
+            Dark = "rgba(66,66,66,1)",
+            BackgroundGray = "rgba(245,245,245,1)",
+            DrawerBackground = "rgba(255,255,255,1)",
+            AppbarBackground = "rgba(89,74,226,1)",
+            Black = "rgba(89,74,226,1)",
+            TextPrimary = "rgba(66,66,66,1)",
+            AppbarText = "rgba(255,255,255,1)",
+            TextSecondary = "rgba(0,0,0,0.5372549019607843)",
+            DrawerText = "rgba(66,66,66,1)",
+            DrawerIcon = "rgba(97,97,97,1)",
+            LinesInputs = "rgba(189,189,189,1)",
+            ActionDisabled = "rgba(0,0,0,0.25882352941176473)",
+            TextDisabled = "rgba(0,0,0,0.3764705882352941)",
+            TableStriped = "rgba(0,0,0,0.0196078431372549)",
+            Divider = "rgba(224,224,224,1)",
+            LinesDefault = "rgba(0,0,0,0.11764705882352941)",
+            ActionDisabledBackground = "rgba(0,0,0,0.11764705882352941)",
+            TableLines = "rgba(224,224,224,1)",
+            DividerLight = "rgba(0,0,0,0.8)",
+            Warning = "rgba(255,152,0,1)",
+            Error = "rgba(244,67,54,1)",
+            ActionDefault = "rgba(0,0,0,0.5372549019607843)",
+            Primary = "rgba(89,74,226,1)",
+            Success = "rgba(0,200,83,1)",
+            InfoLighten = "rgb(71,167,245)",
+            PrimaryDarken = "rgb(62,44,221)",
+            SuccessDarken = "rgb(0,163,68)",
+            DarkLighten = "rgb(87,87,87)",
+            WarningLighten = "rgb(255,167,36)",
+            ErrorLighten = "rgb(246,96,85)",
+            ErrorDarken = "rgb(242,28,13)",
+            DarkDarken = "rgb(46,46,46)",
+            WarningDarken = "rgb(214,129,0)",
+            PrimaryLighten = "rgb(118,106,231)",
+            SuccessLighten = "rgb(0,235,98)",
+            InfoDarken = "rgb(12,128,223)",
+        },
+        PaletteDark = new PaletteDark()
+        {
+            Surface = "rgba(55,55,64,1)",
+            Background = "rgba(50,51,61,1)",
+            Info = "rgba(50,153,255,1)",
+            Dark = "rgba(39,39,47,1)",
+            BackgroundGray = "rgba(39,39,47,1)",
+            DrawerBackground = "rgba(39,39,47,1)",
+            AppbarBackground = "rgba(39,39,47,1)",
+            Black = "rgba(39,39,47,1)",
+            TextPrimary = "rgba(255,255,255,0.6980392156862745)",
+            AppbarText = "rgba(255,255,255,0.6980392156862745)",
+            TextSecondary = "rgba(255,255,255,0.4980392156862745)",
+            DrawerText = "rgba(255,255,255,0.4980392156862745)",
+            DrawerIcon = "rgba(255,255,255,0.4980392156862745)",
+            LinesInputs = "rgba(255,255,255,0.2980392156862745)",
+            ActionDisabled = "rgba(255,255,255,0.25882352941176473)",
+            TextDisabled = "rgba(255,255,255,0.2)",
+            TableStriped = "rgba(255,255,255,0.06)",
+            Divider = "rgba(255,255,255,0.11764705882352941)",
+            LinesDefault = "rgba(255,255,255,0.11764705882352941)",
+            ActionDisabledBackground = "rgba(255,255,255,0.11764705882352941)",
+            TableLines = "rgba(255,255,255,0.11764705882352941)",
+            DividerLight = "rgba(255,255,255,0.058823529411764705)",
+            Warning = "rgba(255,168,0,1)",
+            Error = "rgba(246,78,98,1)",
+            ActionDefault = "rgba(173,173,177,1)",
+            Primary = "rgba(119,107,231,1)",
+            Success = "rgba(11,186,131,1)",
+            InfoLighten = "rgb(92,173,255)",
+            PrimaryDarken = "rgb(90,75,226)",
+            SuccessDarken = "rgb(9,154,108)",
+            DarkLighten = "rgb(56,56,67)",
+            WarningLighten = "rgb(255,182,36)",
+            ErrorLighten = "rgb(248,119,134)",
+            ErrorDarken = "rgb(244,47,70)",
+            DarkDarken = "rgb(23,23,28)",
+            WarningDarken = "rgb(214,143,0)",
+            PrimaryLighten = "rgb(151,141,236)",
+            SuccessLighten = "rgb(13,222,156)",
+            InfoDarken = "rgb(10,133,255)"
+            
+        },
+        LayoutProperties = new LayoutProperties()
+        {
+            AppbarHeight = "64px",
+            DefaultBorderRadius = "4px",
+            DrawerMiniWidthLeft = "56px",
+            DrawerMiniWidthRight = "56px",
+            DrawerWidthLeft = "240px",
+            DrawerWidthRight = "240px",
+        },
+        Typography = new Typography()
+        {
+            Default = new DefaultTypography
+            {
+                FontFamily = ["Roboto", "Helvetica", "Arial", "sans-serif"],
+                FontWeight = "400",
+                FontSize = ".875rem",
+                LineHeight = "1.43",
+                LetterSpacing = ".01071em",
+                TextTransform = "none",
+            },
+            H1 = new H1Typography
+            {
+                FontWeight = "300",
+                FontSize = "6rem",
+                LineHeight = "1.167",
+                LetterSpacing = "-.01562em",
+                TextTransform = "none",
+            },
+            H2 = new H2Typography
+            {
+                FontWeight = "300",
+                FontSize = "3.75rem",
+                LineHeight = "1.2",
+                LetterSpacing = "-.00833em",
+                TextTransform = "none",
+            },
+            H3 = new H3Typography
+            {
+                FontWeight = "400",
+                FontSize = "3rem",
+                LineHeight = "1.167",
+                LetterSpacing = "0",
+                TextTransform = "none",
+            },
+            H4 = new H4Typography
+            {
+                FontWeight = "400",
+                FontSize = "2.125rem",
+                LineHeight = "1.235",
+                LetterSpacing = ".00735em",
+                TextTransform = "none",
+            },
+            H5 = new H5Typography
+            {
+                FontWeight = "400",
+                FontSize = "1.5rem",
+                LineHeight = "1.334",
+                LetterSpacing = "0",
+                TextTransform = "none",
+            },
+            H6 = new H6Typography
+            {
+                FontWeight = "500",
+                FontSize = "1.25rem",
+                LineHeight = "1.6",
+                LetterSpacing = ".0075em",
+                TextTransform = "none",
+            },
+            Subtitle1 = new Subtitle1Typography
+            {
+                FontWeight = "400",
+                FontSize = "1rem",
+                LineHeight = "1.75",
+                LetterSpacing = ".00938em",
+                TextTransform = "none",
+            },
+            Subtitle2 = new Subtitle2Typography
+            {
+                FontWeight = "500",
+                FontSize = ".875rem",
+                LineHeight = "1.57",
+                LetterSpacing = ".00714em",
+                TextTransform = "none",
+            },
+            Body1 = new Body1Typography
+            {
+                FontWeight = "400",
+                FontSize = "1rem",
+                LineHeight = "1.5",
+                LetterSpacing = ".00938em",
+                TextTransform = "none",
+            },
+            Body2 = new Body2Typography
+            {
+                FontWeight = "400",
+                FontSize = ".875rem",
+                LineHeight = "1.43",
+                LetterSpacing = ".01071em",
+                TextTransform = "none",
+            },
+            Button = new ButtonTypography
+            {
+                FontWeight = "500",
+                FontSize = ".875rem",
+                LineHeight = "1.75",
+                LetterSpacing = ".02857em",
+                TextTransform = "uppercase",
+            },
+            Caption = new CaptionTypography
+            {
+                FontWeight = "400",
+                FontSize = ".75rem",
+                LineHeight = "1.66",
+                LetterSpacing = ".03333em",
+                TextTransform = "none",
+            },
+            Overline = new OverlineTypography
+            {
+                FontWeight = "400",
+                FontSize = ".75rem",
+                LineHeight = "2.66",
+                LetterSpacing = ".08333em",
+                TextTransform = "none",
+            },
+        },
+        ZIndex = new ZIndex()
+        {
+            AppBar = 1300,
+            Dialog = 1400,
+            Drawer = 1100,
+            Popover = 1200,
+            Snackbar = 1500,
+            Tooltip = 1600,
+        },
+    });
+
+    
+ 
+ 
+    /*
+    Custom themes
+    */
+    public static readonly MudTheme Harbor = SafeTheme(nameof(Harbor), () => new MudTheme()
+    {
+        PaletteLight = new PaletteLight
+        {
+            Primary = "#0b6e99",
+            PrimaryContrastText = "#ffffff",
+            Secondary = "#f0b429",
+            SecondaryContrastText = "#3b2f2f",
+            Tertiary = "#2fb7a3",
+            TertiaryContrastText = "#073b33",
+            Background = "#f7f9fb",
+            Surface = "#ffffff",
+            BackgroundGray = "#eef3f6",
+            AppbarBackground = "#0b6e99",
+            AppbarText = "#ffffff",
+            DrawerBackground = "#eef3f6",
+            DrawerText = "#0b2f40",
+            DrawerIcon = "#0b2f40",
+            TextPrimary = "#0b2f40",
+            TextSecondary = "#4b5b65",
+            Success = "#2e7d32",
+            Warning = "#b45309",
+            Error = "#b91c1c",
+            Info = "#0284c7"
+        },
+        PaletteDark = new PaletteDark
+        {
+            Primary = "#7dd3fc",
+            PrimaryContrastText = "#0b2f40",
+            Secondary = "#facc15",
+            SecondaryContrastText = "#1f2937",
+            Tertiary = "#34d399",
+            TertiaryContrastText = "#0f172a",
+            Background = "#0b1220",
+            Surface = "#111827",
+            BackgroundGray = "#0b1220",
+            AppbarBackground = "#0b1220",
+            AppbarText = "#e2e8f0",
+            DrawerBackground = "#0f172a",
+            DrawerText = "#cbd5f5",
+            DrawerIcon = "#cbd5f5",
+            TextPrimary = "#e2e8f0",
+            TextSecondary = "#94a3b8",
+            Success = "#22c55e",
+            Warning = "#f59e0b",
+            Error = "#f87171",
+            Info = "#38bdf8",
+            TableStriped = "rgba(255,255,255,0.06)"
+        },
+        Typography = new Typography
+        {
+            Default = new DefaultTypography
+            {
+                FontFamily = ["Space Grotesk", "Segoe UI", "Arial", "sans-serif"]
+            }
+        }
+    });
+
+    public static readonly MudTheme Saffron = SafeTheme(nameof(Saffron), () => new MudTheme()
+    {
+        PaletteLight = new PaletteLight
+        {
+            Primary = "#b45309",
+            PrimaryContrastText = "#fff7ed",
+            Secondary = "#0f766e",
+            SecondaryContrastText = "#e7f5f2",
+            Tertiary = "#7c3aed",
+            TertiaryContrastText = "#f5f3ff",
+            Background = "#fff9f2",
+            Surface = "#ffffff",
+            BackgroundGray = "#fff3e0",
+            AppbarBackground = "#b45309",
+            AppbarText = "#fff7ed",
+            DrawerBackground = "#fff3e0",
+            DrawerText = "#4b2c20",
+            DrawerIcon = "#4b2c20",
+            TextPrimary = "#3b2f2f",
+            TextSecondary = "#6b5b5b",
+            Success = "#166534",
+            Warning = "#92400e",
+            Error = "#b91c1c",
+            Info = "#1d4ed8"
+        },
+        PaletteDark = new PaletteDark
+        {
+            Primary = "#fdba74",
+            PrimaryContrastText = "#3b2f2f",
+            Secondary = "#2dd4bf",
+            SecondaryContrastText = "#0b1f1c",
+            Tertiary = "#c4b5fd",
+            TertiaryContrastText = "#1f1147",
+            Background = "#1f1612",
+            Surface = "#2a1e18",
+            BackgroundGray = "#1f1612",
+            AppbarBackground = "#1f1612",
+            AppbarText = "#f8f3ee",
+            DrawerBackground = "#2a1e18",
+            DrawerText = "#f1e7de",
+            DrawerIcon = "#f1e7de",
+            TextPrimary = "#f8f3ee",
+            TextSecondary = "#d2c2b7",
+            Success = "#22c55e",
+            Warning = "#f59e0b",
+            Error = "#f87171",
+            Info = "#60a5fa",
+            TableStriped = "rgba(255,255,255,0.06)"
+        },
+        Typography = new Typography
+        {
+            Default = new DefaultTypography
+            {
+                FontFamily = ["Sora", "Segoe UI", "Arial", "sans-serif"]
+            }
+        }
+    });
+
+    public static readonly MudTheme Graphite = SafeTheme(nameof(Graphite), () => new MudTheme()
+    {
+        PaletteLight = new PaletteLight
+        {
+            Primary = "#2f3b47",
+            PrimaryContrastText = "#ffffff",
+            Secondary = "#84cc16",
+            SecondaryContrastText = "#1f2937",
+            Tertiary = "#0ea5e9",
+            TertiaryContrastText = "#072b3a",
+            Background = "#f5f7fa",
+            Surface = "#ffffff",
+            BackgroundGray = "#e7edf2",
+            AppbarBackground = "#2f3b47",
+            AppbarText = "#ffffff",
+            DrawerBackground = "#e7edf2",
+            DrawerText = "#1f2937",
+            DrawerIcon = "#1f2937",
+            TextPrimary = "#1f2937",
+            TextSecondary = "#52606d",
+            Success = "#15803d",
+            Warning = "#b45309",
+            Error = "#b91c1c",
+            Info = "#0284c7"
+        },
+        PaletteDark = new PaletteDark
+        {
+            Primary = "#cbd5e1",
+            PrimaryContrastText = "#0f172a",
+            Secondary = "#a3e635",
+            SecondaryContrastText = "#1f2937",
+            Tertiary = "#38bdf8",
+            TertiaryContrastText = "#0f172a",
+            Background = "#0f141b",
+            Surface = "#151b23",
+            BackgroundGray = "#0f141b",
+            AppbarBackground = "#0f141b",
+            AppbarText = "#e2e8f0",
+            DrawerBackground = "#111827",
+            DrawerText = "#d1d5db",
+            DrawerIcon = "#d1d5db",
+            TextPrimary = "#e2e8f0",
+            TextSecondary = "#94a3b8",
+            Success = "#22c55e",
+            Warning = "#f59e0b",
+            Error = "#f87171",
+            Info = "#60a5fa",
+            TableStriped = "rgba(255,255,255,0.06)"
+        },
+        Typography = new Typography
+        {
+            Default = new DefaultTypography
+            {
+                FontFamily = ["Fira Sans", "Segoe UI", "Arial", "sans-serif"]
+            }
+        }
+    });
+
+    public static readonly MudTheme HighContrast = SafeTheme(nameof(HighContrast), () => new MudTheme()
+    {
+        PaletteLight = new PaletteLight
+        {
+            Primary = "#0057d9",
+            PrimaryContrastText = "#ffffff",
+            Secondary = "#84cc16",
+            SecondaryContrastText = "#ffffff",
+            Tertiary = "#008060",
+            TertiaryContrastText = "#ffffff",
+            Background = "#ffffff",
+            Surface = "#ffffff",
+            BackgroundGray = "#f2f2f2",
+            AppbarBackground = "#000000",
+            AppbarText = "#ffffff",
+            DrawerBackground = "#f2f2f2",
+            DrawerText = "#000000",
+            DrawerIcon = "#000000",
+            TextPrimary = "#000000",
+            TextSecondary = "#1f1f1f",
+            Success = "#0b6b3a",
+            Warning = "#8a4b00",
+            Error = "#b00020",
+            Info = "#0057d9"
+        },
+        PaletteDark = new PaletteDark
+        {
+            Primary = "#79b8ff",
+            PrimaryContrastText = "#0a1f3c",
+            Secondary = "#84cc16",
+            SecondaryContrastText = "#2b0b12",
+            Tertiary = "#34d399",
+            TertiaryContrastText = "#06281d",
+            Background = "#000000",
+            Surface = "#111111",
+            BackgroundGray = "#000000",
+            AppbarBackground = "#000000",
+            AppbarText = "#ffffff",
+            DrawerBackground = "#111111",
+            DrawerText = "#ffffff",
+            DrawerIcon = "#ffffff",
+            TextPrimary = "#ffffff",
+            TextSecondary = "#cfcfcf",
+            Success = "#34d399",
+            Warning = "#fbbf24",
+            Error = "#ff8aa1",
+            Info = "#79b8ff",
+            TableStriped = "rgba(255,255,255,0.08)"
+        },
+        Typography = new Typography
+        {
+            Default = new DefaultTypography
+            {
+                FontFamily = ["IBM Plex Sans", "Segoe UI", "Arial", "sans-serif"]
+            }
+        }
+    });
+
+}
+

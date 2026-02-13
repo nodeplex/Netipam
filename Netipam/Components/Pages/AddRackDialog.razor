@@ -1,0 +1,100 @@
+@using MudBlazor
+@using Netipam.Data
+@using Microsoft.EntityFrameworkCore
+
+@inject AppDbContext DbContext
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="2">
+            <MudTextField T="string"
+                          Label="Name"
+                          @bind-Value="rack.Name"
+                          Required="true"
+                          RequiredError="Name is required."
+                          Disabled="@busy" />
+
+            <MudSelect T="int?"
+                       Label="Location"
+                       @bind-Value="rack.LocationId"
+                       Clearable="true"
+                       Disabled="@busy">
+                @foreach (var l in locations)
+                {
+                    <MudSelectItem T="int?" Value="@l.Id">@l.Name</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudTextField T="string"
+                          Label="Description"
+                          @bind-Value="rack.Description"
+                          Lines="3"
+                          Disabled="@busy" />
+
+            <MudNumericField T="int?"
+                             Label="Rack Size (U)"
+                             @bind-Value="rack.RackUnits"
+                             Min="1"
+                             HelperText="Leave blank for default size."
+                             Disabled="@busy" />
+        </MudStack>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Text"
+                   Color="Color.Secondary"
+                   OnClick="Cancel"
+                   Disabled="@busy">
+            Cancel
+        </MudButton>
+
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   OnClick="Save"
+                   Disabled="@busy">
+            Add
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private Rack rack = new();
+    private List<Location> locations = new();
+    private bool busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        locations = await DbContext.Locations
+            .AsNoTracking()
+            .OrderBy(l => l.Name)
+            .ToListAsync();
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task Save()
+    {
+        if (busy) return;
+        busy = true;
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(rack.Name))
+                return;
+
+            rack.Name = rack.Name.Trim();
+            rack.Description = rack.Description?.Trim();
+
+            DbContext.Racks.Add(rack);
+            await DbContext.SaveChangesAsync();
+
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+}

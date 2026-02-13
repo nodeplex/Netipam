@@ -1,0 +1,176 @@
+﻿@page "/admin/users"
+@attribute [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Admin")]
+
+@using Microsoft.AspNetCore.Identity
+@using MudBlazor
+@using MudBlazor.Components
+@using Netipam.Data
+
+@inject UserManager<ApplicationUser> UserManager
+@inject RoleManager<IdentityRole> RoleManager
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<MudStack Spacing="2">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <MudText Typo="Typo.h5">Users</MudText>
+        <MudSpacer />
+        <MudIconButton Icon="@Icons.Material.Filled.AddBox"
+                       Title="Add user"
+                       Size="Size.Medium"
+                       Class="toolbar-button download-icon-btn add-icon"
+                       OnClick="OpenAddUser" />
+    </MudStack>
+
+    @if (!string.IsNullOrWhiteSpace(error))
+    {
+        <MudAlert Severity="Severity.Error" Dense="true">@error</MudAlert>
+    }
+
+    <MudTable Items="users" Dense="true" Hover="true" Bordered="true" Striped="true">
+        <HeaderContent>
+            <MudTh>Username</MudTh>
+            <MudTh>Roles</MudTh>
+            <MudTh style="width:220px;"></MudTh>
+        </HeaderContent>
+
+        <RowTemplate Context="u">
+            <MudTd>@u.UserName</MudTd>
+            <MudTd>@(userRoles.TryGetValue(u.Id, out var rs) ? string.Join(", ", rs) : "")</MudTd>
+            <MudTd>
+                <MudIconButton Icon="@Icons.Material.Filled.Badge"
+                               Title="Edit roles"
+                               Size="Size.Small"
+                               OnClick="@(() => OpenRoles(u))" />
+
+                <MudIconButton Icon="@Icons.Material.Filled.Password"
+                               Title="Reset password"
+                               Size="Size.Small"
+                               OnClick="@(() => OpenResetPassword(u))" />
+
+                <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                               Color="Color.Error"
+                               Title="Delete user"
+                               Size="Size.Small"
+                               OnClick="@(() => ConfirmDelete(u))" />
+            </MudTd>
+        </RowTemplate>
+
+        <NoRecordsContent>
+            <MudText Typo="Typo.body2" Class="pa-4">No users found.</MudText>
+        </NoRecordsContent>
+    </MudTable>
+</MudStack>
+
+<style>
+    .download-icon-btn {
+        height: 26px;
+        width: 26px;
+        padding: 0;
+    }
+
+    .add-icon {
+        margin-right: 20px;
+    }
+</style>
+
+@code {
+    private List<ApplicationUser> users = new();
+    private Dictionary<string, List<string>> userRoles = new();
+    private string? error;
+
+    protected override async Task OnInitializedAsync()
+        => await Reload();
+
+    private async Task Reload()
+    {
+        error = null;
+        try
+        {
+            users = UserManager.Users
+                .OrderBy(u => u.UserName)
+                .ToList();
+
+            userRoles.Clear();
+            foreach (var u in users)
+            {
+                var roles = await UserManager.GetRolesAsync(u);
+                userRoles[u.Id] = roles.OrderBy(x => x).ToList();
+            }
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+    }
+
+    private async Task OpenAddUser()
+    {
+        var roles = RoleManager.Roles.Select(r => r.Name!).OrderBy(x => x).ToList();
+        var parameters = new DialogParameters { ["AllRoles"] = roles };
+        var dlg = DialogService.ShowStandard<AddUserDialog>("Add user", parameters);
+        var result = await dlg.Result;
+
+        if (!result.Canceled)
+            await Reload();
+    }
+
+    private async Task OpenRoles(ApplicationUser user)
+    {
+        var allRoles = RoleManager.Roles.Select(r => r.Name!).OrderBy(x => x).ToList();
+        var current = await UserManager.GetRolesAsync(user);
+
+        var parameters = new DialogParameters
+        {
+            ["UserId"] = user.Id,
+            ["Username"] = user.UserName ?? "",
+            ["AllRoles"] = allRoles,
+            ["CurrentRoles"] = current.ToList()
+        };
+
+        var dlg = DialogService.ShowStandard<EditUserRolesDialog>("Edit roles", parameters);
+        var result = await dlg.Result;
+
+        if (!result.Canceled)
+            await Reload();
+    }
+
+    private async Task OpenResetPassword(ApplicationUser user)
+    {
+        var parameters = new DialogParameters
+        {
+            ["UserId"] = user.Id,
+            ["Username"] = user.UserName ?? ""
+        };
+
+        var dlg = DialogService.ShowStandard<ResetUserPasswordDialog>("Reset password", parameters);
+        var result = await dlg.Result;
+
+        if (!result.Canceled)
+        {
+            Snackbar.Add("Password reset.", Severity.Success);
+        }
+    }
+
+    private async Task ConfirmDelete(ApplicationUser user)
+    {
+        var ok = await DialogService.ShowMessageBox(
+            "Delete user?",
+            $"Delete '{user.UserName}'? This cannot be undone.",
+            yesText: "Delete",
+            cancelText: "Cancel");
+
+        if (ok != true) return;
+
+        var res = await UserManager.DeleteAsync(user);
+        if (!res.Succeeded)
+        {
+            Snackbar.Add(string.Join(" | ", res.Errors.Select(e => e.Description)), Severity.Error);
+            return;
+        }
+
+        Snackbar.Add($"Deleted '{user.UserName}'.", Severity.Success);
+        await Reload();
+    }
+}
+

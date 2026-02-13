@@ -1,0 +1,14 @@
+**/bin
+**/obj
+**/.vs
+**/.git
+**/.gitignore
+**/.gitattributes
+**/.github
+**/*.user
+**/*.suo
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/data
+**/node_modules

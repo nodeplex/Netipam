@@ -1,0 +1,800 @@
+﻿@page "/settings"
+@implements IDisposable
+
+@using Netipam.Data
+@using Netipam.Services
+@using Netipam.Unifi
+@using Netipam.Components.Layout
+@using MudBlazor
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Identity
+@using Microsoft.AspNetCore.Components.Forms
+
+@inject AppSettingsService SettingsService
+@inject UnifiUpdaterControl UnifiUpdater
+@inject UnifiApiClient UnifiClient
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject UserManager<ApplicationUser> UserManager
+@inject DatabaseResetService DatabaseResetService
+@inject BackupService BackupService
+
+@if (_isViewer)
+{
+    <MudAlert Severity="Severity.Warning" Dense="true">
+        Viewer accounts cannot access Settings.
+    </MudAlert>
+}
+else
+{
+    <MudStack Spacing="2">
+        <MudText Typo="Typo.h6">Settings</MudText>
+
+    <!-- -----------------------------
+         UniFi Connection (DB-backed)
+         ----------------------------- -->
+    <MudPaper Class="pa-3" Elevation="1">
+        <MudStack Spacing="1">
+            <MudText Typo="Typo.h6">UniFi Connection</MudText>
+            <MudText Typo="Typo.caption">
+                Recommended: Dedicated UniFi account with <b>local access</b> and <b>view-only</b> permissions to Network.
+            </MudText>
+        </MudStack>
+
+        <MudGrid Class="mt-2" Spacing="2">
+            <MudItem xs="12" md="6">
+                <MudTextField T="string"
+                              Label="Access URL"
+                              Placeholder="https://unifi.local:8443"
+                              Immediate="true"
+                              @bind-Value="model.UnifiBaseUrl"
+                              @bind-Value:after="SaveAfterEdit" />
+                <MudText Typo="Typo.caption" Class="mt-1">
+                    UniFi OS or gateway console URL
+                </MudText>
+            </MudItem>
+
+            <MudItem xs="12" md="6">
+                <MudSelect T="string"
+                           Label="Auth mode"
+                           Dense="true"
+                           @bind-Value="model.UnifiAuthMode"
+                           @bind-Value:after="OnUnifiAuthModeAfter">
+                    <MudSelectItem T="string" Value="@("Session")">Session (username/password)</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("ApiKey")">API key (X-API-KEY)</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+
+            <MudItem xs="12" md="6">
+                <MudTextField T="string"
+                              Label="Site name"
+                              Placeholder="default"
+                              Immediate="true"
+                              @bind-Value="model.UnifiSiteName"
+                              @bind-Value:after="SaveAfterEdit" />
+                <MudText Typo="Typo.caption" Class="mt-1">
+                    UniFi site (often <code>default</code>)
+                </MudText>
+            </MudItem>
+
+            @if (model.UnifiAuthMode == "ApiKey")
+            {
+                <MudItem xs="12" md="6">
+                    <MudTextField T="string"
+                                  Label="API key"
+                                  Immediate="true"
+                                  InputType="InputType.Password"
+                                  Value="@_unifiApiKeyPlain"
+                                  ValueChanged="OnUnifiApiKeyChanged" />
+
+                    <MudStack Row="true" Spacing="1" Class="mt-2">
+                        <MudButton Variant="Variant.Outlined"
+                                   Size="Size.Small"
+                                   Disabled="@string.IsNullOrWhiteSpace(model.UnifiApiKeyProtected)"
+                                   OnClick="ClearUnifiApiKey">
+                            Clear saved API key
+                        </MudButton>
+                    </MudStack>
+                </MudItem>
+            }
+            else
+            {
+                <MudItem xs="12" md="6">
+                    <MudTextField T="string"
+                                  Label="Username"
+                                  Immediate="true"
+                                  @bind-Value="model.UnifiUsername"
+                                  @bind-Value:after="SaveAfterEdit" />
+                </MudItem>
+
+                <MudItem xs="12" md="6">
+                    <MudTextField T="string"
+                                  Label="Password"
+                                  Immediate="true"
+                                  InputType="InputType.Password"
+                                  Value="@_unifiPasswordPlain"
+                                  ValueChanged="OnUnifiPasswordChanged" />
+
+                    <MudStack Row="true" Spacing="1" Class="mt-2">
+                        <MudButton Variant="Variant.Outlined"
+                                   Size="Size.Small"
+                                   Disabled="@string.IsNullOrWhiteSpace(model.UnifiPasswordProtected)"
+                                   OnClick="ClearUnifiPassword">
+                            Clear saved password
+                        </MudButton>
+                    </MudStack>
+                </MudItem>
+            }
+
+            <MudItem xs="12">
+                <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+                    <MudButton Variant="Variant.Filled"
+                               Size="Size.Small" 
+                               Style="font-size:0.8rem;"
+                               Color="Color.Primary"
+                               Disabled="@testBusy"
+                               OnClick="TestUnifiConnection">
+                        Test UniFi connection
+                    </MudButton>
+
+                    @if (!string.IsNullOrWhiteSpace(testStatus))
+                    {
+                        <MudText Typo="Typo.caption">@testStatus</MudText>
+                    }
+                </MudStack>
+            </MudItem>
+        </MudGrid>
+    </MudPaper>
+
+    <!-- -----------------------------
+         UniFi Online Status Updater
+         ----------------------------- -->
+    <MudPaper Class="pa-3 mt-2" Elevation="1">
+        <MudText Typo="Typo.h6">UniFi Online Status Updater</MudText>
+
+        <MudGrid Class="mt-2" Spacing="2">
+            <MudItem xs="12" sm="6" md="4">
+                <MudSwitch T="bool"
+                           Color="Color.Primary"
+                           Label="Enable updater"
+                           @bind-Value="model.UnifiUpdaterEnabled"
+                           @bind-Value:after="OnUpdaterEnabledAfter" />
+                <MudText Typo="Typo.caption">
+                    When disabled, scheduled updates pause. “Run updater now” still works.
+                </MudText>
+            </MudItem>
+
+            <MudItem xs="12" sm="6" md="4">
+                <MudNumericField T="int"
+                                 Label="Updater interval (seconds)"
+                                 Min="30"
+                                 Max="86400"
+                                 Step="5"
+                                 Immediate="true"
+                                 @bind-Value="model.UnifiUpdaterIntervalSeconds"
+                                 @bind-Value:after="OnIntervalAfter"
+                                 Disabled="@(!model.UnifiUpdaterEnabled)" />
+                <MudText Typo="Typo.caption" Class="mt-1">
+                    Recommended: 60–600 seconds (min allowed: 30)
+                </MudText>
+            </MudItem>
+
+            <MudItem xs="12">
+                <MudText Typo="Typo.subtitle2">Sync fields</MudText>
+                <MudText Typo="Typo.caption">
+                    Choose which fields the updater is allowed to change. Enabling these will override any manual entries.
+                </MudText>
+            </MudItem>
+
+            <MudItem xs="8" sm="4" md="3">
+                <MudSwitch T="bool"
+                           Color="Color.Primary"
+                           Label="Online status"
+                           @bind-Value="model.UnifiSyncOnlineStatus"
+                           @bind-Value:after="OnSyncOnlineAfter"
+                           Disabled="@(!model.UnifiUpdaterEnabled)" />
+            </MudItem>
+            
+            <MudItem xs="8" sm="4" md="3">
+                <MudSwitch T="bool"
+                           Color="Color.Primary"
+                           Label="Name"
+                           @bind-Value="model.UnifiSyncName"
+                           @bind-Value:after="OnSyncNameAfter"
+                           Disabled="@(!model.UnifiUpdaterEnabled)" />
+            </MudItem>
+            
+            <MudItem xs="8" sm="4" md="3">
+                <MudSwitch T="bool"
+                           Color="Color.Primary"
+                           Label="Hostname"
+                           @bind-Value="model.UnifiSyncHostname"
+                           @bind-Value:after="OnSyncHostnameAfter"
+                           Disabled="@(!model.UnifiUpdaterEnabled)" />
+            </MudItem>
+
+            <MudItem xs="8" sm="4" md="3">
+                <MudSwitch T="bool"
+                           Color="Color.Primary"
+                           Label="IP address"
+                           @bind-Value="model.UnifiSyncIpAddress"
+                           @bind-Value:after="OnSyncIpAfter"
+                           Disabled="@(!model.UnifiUpdaterEnabled)" />
+            </MudItem>
+
+            <MudItem xs="8" sm="4" md="3">
+                <MudSwitch T="bool"
+                           Color="Color.Primary"
+                           Label="Connection + Upstream"
+                           @bind-Value="model.UnifiUpdateConnectionFieldsWhenOnline"
+                           @bind-Value:after="OnUpdateConnFieldsAfter"
+                           Disabled="@(!model.UnifiUpdaterEnabled)" />
+
+            </MudItem>
+            
+            <MudItem xs="8" sm="4" md="3">
+                <MudSwitch T="bool"
+                           Color="Color.Primary"
+                           Label="Manufacturer"
+                           @bind-Value="model.UnifiSyncManufacturer"
+                           @bind-Value:after="OnSyncManufacturerAfter"
+                           Disabled="@(!model.UnifiUpdaterEnabled)" />
+            </MudItem>
+
+            <MudItem xs="8" sm="4" md="3">
+                <MudSwitch T="bool"
+                           Color="Color.Primary"
+                           Label="Model"
+                           @bind-Value="model.UnifiSyncModel"
+                           @bind-Value:after="OnSyncModelAfter"
+                           Disabled="@(!model.UnifiUpdaterEnabled)" />
+            </MudItem>
+
+            
+
+        </MudGrid>
+
+        <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Class="mt-3">
+            <MudButton Variant="Variant.Filled"
+                       Size="Size.Small" 
+                       Style="font-size:0.8rem;"
+                       Color="Color.Primary"
+                       OnClick="RunUpdaterNow">
+                Run updater now
+            </MudButton>
+
+            <!-- BONUS: always show -->
+            <MudText Typo="Typo.caption">
+                Last run:
+                @(UnifiUpdater.LastRunUtc is null
+                                ? "—"
+                                : UnifiUpdater.LastRunUtc.Value.ToLocalTime().ToString(model.DateFormat))
+
+                @if (!string.IsNullOrWhiteSpace(UnifiUpdater.LastError))
+                {
+                    <span> • Error: @UnifiUpdater.LastError</span>
+                }
+                else if (UnifiUpdater.LastRunUtc is not null)
+                {
+                    <span> • Changed: @UnifiUpdater.LastChangedCount</span>
+                }
+            </MudText>
+        </MudStack>
+    </MudPaper>
+
+    <!-- -----------------------------
+         UI
+         ----------------------------- -->
+    <MudPaper Class="pa-3 mt-2" Elevation="1">
+        <MudText Typo="Typo.h6">UI</MudText>
+
+        <MudGrid Class="mt-2" Spacing="2">
+            <MudItem xs="12" sm="6" md="4">
+                <MudNumericField T="int"
+                                 Label="UI auto-refresh (seconds, 0 = off)"
+                                 Min="0"
+                                 Max="3600"
+                                 Step="5"
+                                 Immediate="true"
+                                 @bind-Value="model.UiAutoRefreshSeconds"
+                                 @bind-Value:after="SaveAfterEdit" />
+            </MudItem>
+
+            <MudItem xs="12" sm="6" md="4">
+                <MudSwitch T="bool"
+                           Color="Color.Primary"
+                           Label="Show WAN status on dashboard"
+                           @bind-Value="model.UiShowWanStatus"
+                           @bind-Value:after="SaveAfterEdit" />
+            </MudItem>
+
+            <MudItem xs="12" sm="6" md="4">
+                <MudSelect T="string"
+                           Label="Date format"
+                           Dense="true"
+                           @bind-Value="model.DateFormat"
+                           @bind-Value:after="SaveAfterEdit">
+
+                    <MudSelectItem T="string" Value="@("MM-dd-yyyy HH:mm")">MM-dd-yyyy HH:mm</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("yyyy-MM-dd HH:mm")">yyyy-MM-dd HH:mm</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("MM/dd/yyyy h:mm tt")">MM/dd/yyyy h:mm tt</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("yyyy-MM-ddTHH:mm:ss")">ISO-like (yyyy-MM-ddTHH:mm:ss)</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+
+            <MudItem xs="12" sm="6" md="4">
+                <MudTextField T="string"
+                              Label="Application name"
+                              Placeholder="Netipam"
+                              Immediate="true"
+                              @bind-Value="model.SiteTitle"
+                              @bind-Value:after="OnSiteTitleChanged" />
+
+                <MudText Typo="Typo.caption" Class="mt-1">
+                    Shown in the top application bar
+                </MudText>
+            </MudItem>
+
+            <MudItem xs="12" sm="6" md="4">
+                <MudSelect T="string"
+                           Label="Theme"
+                           Dense="true"
+                           @bind-Value="model.ThemeName"
+                           @bind-Value:after="OnThemeAfter">
+                    @foreach (var theme in themeOptions)
+                    {
+                        <MudSelectItem T="string" Value="@theme.Name">@theme.DisplayName</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudText Typo="Typo.caption" Class="mt-1">
+                    Available themes
+                </MudText>
+                @if (themeErrors.Count > 0)
+                {
+                    <MudText Typo="Typo.caption" Color="Color.Error" Class="mt-1">
+                        Invalid theme(s) skipped: @string.Join(", ", themeErrors.Keys)
+                    </MudText>
+                }
+            </MudItem>
+        </MudGrid>
+    </MudPaper>
+
+    <MudStack Row="true" Spacing="2" Class="mt-3">
+        <MudButton Variant="Variant.Filled" Size="Size.Small" Style="font-size:0.8rem;" Color="Color.Primary" OnClick="Save">
+            Save
+        </MudButton>
+        <MudButton Variant="Variant.Outlined" Size="Size.Small" Style="font-size:0.8rem;" OnClick="Reload">
+            Reload
+        </MudButton>
+    </MudStack>
+
+    <AuthorizeView Roles="Admin">
+        <MudPaper Class="pa-3 mt-4" Elevation="1">
+            <MudText Typo="Typo.h6">Backup</MudText>
+            <MudText Typo="Typo.caption">
+                Backups are JSON and are designed to work across versions. User accounts and roles are included.
+                Importing will replace existing users and may require re-login.
+            </MudText>
+
+            <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Class="mt-2">
+                <MudButton Variant="Variant.Outlined"
+                           Size="Size.Small"
+                           Style="font-size:0.8rem;"
+                           Href="/backup/export">
+                    Download backup
+                </MudButton>
+
+                <MudText Typo="Typo.caption">@backupStatus</MudText>
+                
+            </MudStack>
+            
+        </MudPaper>
+        <MudPaper Class="pa-3 mt-4" Elevation="1">
+            <MudText Typo="Typo.h6">Restore</MudText>
+            <MudText Typo="Typo.caption">
+                Importing will replace existing users and may require re-login.
+            </MudText>
+            <MudGrid Class="mt-3" Spacing="2">
+
+                <MudItem xs="12" md="4">
+                    <InputFile OnChange="OnBackupFileSelected" />
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudTextField T="string"
+                                  Label="Type IMPORT to confirm"
+                                  Immediate="true"
+                                  @bind-Value="backupConfirmText" />
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudTextField T="string"
+                                  Label="Current password"
+                                  Immediate="true"
+                                  InputType="InputType.Password"
+                                  @bind-Value="backupPassword" />
+                </MudItem>
+                <MudItem xs="12">
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Warning"
+                               Size="Size.Small"
+                               Style="font-size:0.8rem;"
+                               Disabled="@(!CanImportBackup)"
+                               OnClick="ImportBackup">
+                        Import backup (replaces data)
+                    </MudButton>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+
+        <MudPaper Class="pa-3 mt-4" Elevation="1">
+            <MudText Typo="Typo.h6" Color="Color.Error">Reset Imported Data</MudText>
+            <MudText Typo="Typo.caption">
+                This will delete imported data (devices/clients, subnets, alerts, history, updater logs, access panel ordering)
+                but keep users, settings, and configuration like client types, locations, racks, and access categories.
+            </MudText>
+
+            <MudGrid Class="mt-2" Spacing="2">
+                <MudItem xs="12" md="4">
+                    <MudTextField T="string"
+                                  Label="Type RESET to confirm"
+                                  Immediate="true"
+                                  @bind-Value="resetConfirmText" />
+                </MudItem>
+                <MudItem xs="12" md="4">
+                    <MudTextField T="string"
+                                  Label="Current password"
+                                  Immediate="true"
+                                  InputType="InputType.Password"
+                                  @bind-Value="resetPassword" />
+                </MudItem>
+                <MudItem xs="12" md="4" Class="d-flex align-items-end">
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Error"
+                               Size="Size.Small"
+                               Style="font-size:0.8rem;"
+                               Disabled="@(!CanReset)"
+                               OnClick="ResetImportedData">
+                        Reset Imported Data
+                    </MudButton>
+                </MudItem>
+            </MudGrid>
+        </MudPaper>
+    </AuthorizeView>
+    </MudStack>
+}
+
+@code {
+    private const int MinUnifiIntervalSeconds = 30;
+
+    private AppSetting model = new() { Id = 1 };
+    private readonly IReadOnlyList<MainLayout.ThemeOption> themeOptions = MainLayout.GetThemeOptions();
+    private readonly IReadOnlyDictionary<string, string> themeErrors = MainLayout.GetThemeErrors();
+
+    private string? _unifiPasswordPlain; // plain only in UI memory
+    private string? _unifiApiKeyPlain; // plain only in UI memory
+    private bool testBusy;
+    private string? testStatus;
+    private string? resetConfirmText;
+    private string? resetPassword;
+    private bool resetBusy;
+    private IBrowserFile? backupFile;
+    private string? backupConfirmText;
+    private string? backupPassword;
+    private string? backupStatus;
+    private bool backupBusy;
+    private bool _isViewer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        _isViewer = authState.User.IsInRole("Viewer");
+
+        if (_isViewer)
+            return;
+
+        // NEW: re-render when updater status changes (background service)
+        UnifiUpdater.StatusChanged += OnUpdaterStatusChanged;
+
+        model = await SettingsService.LoadAsync();
+        model.ThemeName = MainLayout.NormalizeThemeName(model.ThemeName);
+        model.UnifiAuthMode = NormalizeUnifiAuthMode(model.UnifiAuthMode);
+        _unifiPasswordPlain = SettingsService.Unprotect(model.UnifiPasswordProtected);
+        _unifiApiKeyPlain = SettingsService.Unprotect(model.UnifiApiKeyProtected);
+    }
+
+    private void OnUpdaterStatusChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        UnifiUpdater.StatusChanged -= OnUpdaterStatusChanged;
+    }
+
+    private Task OnSiteTitleChanged()
+    {
+        model.SiteTitle = string.IsNullOrWhiteSpace(model.SiteTitle)
+            ? "Netipam"
+            : model.SiteTitle.Trim();
+
+        return SettingsService.UpdateAsync(s => s.SiteTitle = model.SiteTitle);
+    }
+
+    private Task OnUpdaterEnabledAfter()
+        => SettingsService.UpdateAsync(s => s.UnifiUpdaterEnabled = model.UnifiUpdaterEnabled);
+
+    private Task OnUpdateConnFieldsAfter()
+        => SettingsService.UpdateAsync(s => s.UnifiUpdateConnectionFieldsWhenOnline = model.UnifiUpdateConnectionFieldsWhenOnline);
+
+    private Task OnSyncIpAfter()
+        => SettingsService.UpdateAsync(s => s.UnifiSyncIpAddress = model.UnifiSyncIpAddress);
+
+    private Task OnSyncOnlineAfter()
+        => SettingsService.UpdateAsync(s => s.UnifiSyncOnlineStatus = model.UnifiSyncOnlineStatus);
+
+    private Task OnSyncNameAfter()
+        => SettingsService.UpdateAsync(s => s.UnifiSyncName = model.UnifiSyncName);
+
+    private Task OnSyncHostnameAfter()
+        => SettingsService.UpdateAsync(s => s.UnifiSyncHostname = model.UnifiSyncHostname);
+
+    private Task OnSyncManufacturerAfter()
+        => SettingsService.UpdateAsync(s => s.UnifiSyncManufacturer = model.UnifiSyncManufacturer);
+
+    private Task OnSyncModelAfter()
+        => SettingsService.UpdateAsync(s => s.UnifiSyncModel = model.UnifiSyncModel);
+
+
+    private Task OnThemeAfter()
+    {
+        model.ThemeName = MainLayout.NormalizeThemeName(model.ThemeName);
+        return SettingsService.UpdateAsync(s => s.ThemeName = model.ThemeName);
+    }
+
+    private async Task OnIntervalAfter()
+    {
+        model.UnifiUpdaterIntervalSeconds = model.UnifiUpdaterIntervalSeconds <= 0
+            ? 0
+            : Math.Max(MinUnifiIntervalSeconds, model.UnifiUpdaterIntervalSeconds);
+
+        await SettingsService.UpdateAsync(s => s.UnifiUpdaterIntervalSeconds = model.UnifiUpdaterIntervalSeconds);
+    }
+
+    private async Task SaveAfterEdit()
+    {
+        if (model.UnifiUpdaterIntervalSeconds > 0)
+            model.UnifiUpdaterIntervalSeconds = Math.Max(MinUnifiIntervalSeconds, model.UnifiUpdaterIntervalSeconds);
+
+        model.ThemeName = MainLayout.NormalizeThemeName(model.ThemeName);
+
+        if (string.IsNullOrWhiteSpace(model.DateFormat))
+            model.DateFormat = "MM-dd-yyyy HH:mm";
+
+        model.UnifiAuthMode = NormalizeUnifiAuthMode(model.UnifiAuthMode);
+
+        if (!string.IsNullOrWhiteSpace(_unifiPasswordPlain))
+            model.UnifiPasswordProtected = SettingsService.Protect(_unifiPasswordPlain);
+        if (!string.IsNullOrWhiteSpace(_unifiApiKeyPlain))
+            model.UnifiApiKeyProtected = SettingsService.Protect(_unifiApiKeyPlain);
+
+        await SettingsService.SaveAsync(model);
+    }
+
+    private async Task Save()
+    {
+        await SaveAfterEdit();
+        Snackbar.Add("Settings saved.", Severity.Success);
+    }
+
+    private async Task Reload()
+    {
+        model = await SettingsService.LoadAsync();
+        model.UnifiAuthMode = NormalizeUnifiAuthMode(model.UnifiAuthMode);
+        _unifiPasswordPlain = SettingsService.Unprotect(model.UnifiPasswordProtected);
+        _unifiApiKeyPlain = SettingsService.Unprotect(model.UnifiApiKeyProtected);
+
+        Snackbar.Add("Settings reloaded.", Severity.Info);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void RunUpdaterNow()
+    {
+        UnifiUpdater.TriggerNow();
+        Snackbar.Add("Updater triggered. It will run shortly.", Severity.Info);
+    }
+
+    private async Task OnUnifiPasswordChanged(string value)
+    {
+        _unifiPasswordPlain = value;
+
+        model.UnifiPasswordProtected = string.IsNullOrWhiteSpace(value)
+            ? null
+            : SettingsService.Protect(value);
+
+        await SettingsService.UpdateAsync(s => s.UnifiPasswordProtected = model.UnifiPasswordProtected);
+    }
+
+    private async Task OnUnifiApiKeyChanged(string value)
+    {
+        _unifiApiKeyPlain = value;
+
+        model.UnifiApiKeyProtected = string.IsNullOrWhiteSpace(value)
+            ? null
+            : SettingsService.Protect(value);
+
+        await SettingsService.UpdateAsync(s => s.UnifiApiKeyProtected = model.UnifiApiKeyProtected);
+    }
+
+    private async Task OnUnifiAuthModeAfter()
+    {
+        model.UnifiAuthMode = NormalizeUnifiAuthMode(model.UnifiAuthMode);
+        await SettingsService.UpdateAsync(s => s.UnifiAuthMode = model.UnifiAuthMode);
+    }
+
+    private async Task ClearUnifiPassword()
+    {
+        _unifiPasswordPlain = null;
+        model.UnifiPasswordProtected = null;
+
+        await SettingsService.UpdateAsync(s => s.UnifiPasswordProtected = null);
+        Snackbar.Add("Saved UniFi password cleared.", Severity.Warning);
+    }
+
+    private async Task ClearUnifiApiKey()
+    {
+        _unifiApiKeyPlain = null;
+        model.UnifiApiKeyProtected = null;
+
+        await SettingsService.UpdateAsync(s => s.UnifiApiKeyProtected = null);
+        Snackbar.Add("Saved UniFi API key cleared.", Severity.Warning);
+    }
+
+    private async Task TestUnifiConnection()
+    {
+        if (testBusy) return;
+        testBusy = true;
+        testStatus = null;
+
+        try
+        {
+            using var doc = await UnifiClient.GetActiveClientsAsync();
+            testStatus = $"Success — UniFi responded at {DateTime.Now.ToString(model.DateFormat)}";
+            Snackbar.Add("UniFi connection test succeeded.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            testStatus = $"Failed — {ex.Message}";
+            Snackbar.Add($"UniFi connection test failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            testBusy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private static string NormalizeUnifiAuthMode(string? mode)
+        => string.Equals(mode?.Trim(), "ApiKey", StringComparison.OrdinalIgnoreCase) ? "ApiKey" : "Session";
+
+    private void OnBackupFileSelected(InputFileChangeEventArgs e)
+    {
+        backupFile = e.FileCount > 0 ? e.File : null;
+        backupStatus = backupFile is null
+            ? "No file selected."
+            : $"{backupFile.Name} ({backupFile.Size / 1024} KB)";
+    }
+
+    private bool CanImportBackup =>
+        !backupBusy &&
+        backupFile is not null &&
+        string.Equals(backupConfirmText?.Trim(), "IMPORT", StringComparison.Ordinal) &&
+        !string.IsNullOrWhiteSpace(backupPassword);
+
+    private async Task ImportBackup()
+    {
+        if (!CanImportBackup)
+            return;
+
+        var confirmed = await DialogService.ShowMessageBox(
+            title: "Import backup?",
+            message: "This will replace existing data (devices, subnets, alerts, history, logs).",
+            yesText: "Import",
+            cancelText: "Cancel");
+
+        if (confirmed != true)
+            return;
+
+        backupBusy = true;
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = await UserManager.GetUserAsync(authState.User);
+
+            if (user is null)
+            {
+                Snackbar.Add("Unable to verify user.", Severity.Error);
+                return;
+            }
+
+            var passwordOk = await UserManager.CheckPasswordAsync(user, backupPassword ?? "");
+            if (!passwordOk)
+            {
+                Snackbar.Add("Password verification failed.", Severity.Error);
+                return;
+            }
+
+            if (backupFile!.Size > 1024L * 1024L * 200L)
+            {
+                backupStatus = "Backup file is too large.";
+                Snackbar.Add(backupStatus, Severity.Error);
+                return;
+            }
+
+            await using var stream = backupFile.OpenReadStream();
+            await BackupService.ImportAsync(stream);
+
+            backupStatus = "Backup imported successfully.";
+            backupConfirmText = null;
+            backupPassword = null;
+            backupFile = null;
+            Snackbar.Add("Backup imported.", Severity.Success);
+        }
+        finally
+        {
+            backupBusy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private bool CanReset =>
+        !resetBusy &&
+        string.Equals(resetConfirmText?.Trim(), "RESET", StringComparison.Ordinal) &&
+        !string.IsNullOrWhiteSpace(resetPassword);
+
+    private async Task ResetImportedData()
+    {
+        if (!CanReset)
+            return;
+
+        var confirmed = await DialogService.ShowMessageBox(
+            title: "Reset imported data?",
+            message: "This will permanently delete imported devices/clients, subnets, alerts, history, and updater logs.",
+            yesText: "Reset",
+            cancelText: "Cancel");
+
+        if (confirmed != true)
+            return;
+
+        resetBusy = true;
+        try
+        {
+            var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+            var user = await UserManager.GetUserAsync(authState.User);
+
+            if (user is null)
+            {
+                Snackbar.Add("Unable to verify user.", Severity.Error);
+                return;
+            }
+
+            var passwordOk = await UserManager.CheckPasswordAsync(user, resetPassword ?? "");
+            if (!passwordOk)
+            {
+                Snackbar.Add("Password verification failed.", Severity.Error);
+                return;
+            }
+
+            await DatabaseResetService.ResetImportedDataAsync();
+
+            resetConfirmText = null;
+            resetPassword = null;
+            Snackbar.Add("Imported data has been reset.", Severity.Success);
+        }
+        finally
+        {
+            resetBusy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+}

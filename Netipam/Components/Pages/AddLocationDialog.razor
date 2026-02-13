@@ -1,0 +1,72 @@
+@using MudBlazor
+@using Netipam.Data
+
+@inject AppDbContext DbContext
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="2">
+            <MudTextField T="string"
+                          Label="Name"
+                          @bind-Value="location.Name"
+                          Required="true"
+                          RequiredError="Name is required."
+                          Disabled="@busy" />
+
+            <MudTextField T="string"
+                          Label="Description"
+                          @bind-Value="location.Description"
+                          Lines="2"
+                          Disabled="@busy" />
+        </MudStack>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Text"
+                   Color="Color.Secondary"
+                   OnClick="Cancel"
+                   Disabled="@busy">
+            Cancel
+        </MudButton>
+
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   OnClick="Save"
+                   Disabled="@busy">
+            Add
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private Location location = new();
+    private bool busy;
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task Save()
+    {
+        if (busy) return;
+        busy = true;
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(location.Name))
+                return;
+
+            location.Name = location.Name.Trim();
+            location.Description = location.Description?.Trim();
+
+            DbContext.Locations.Add(location);
+            await DbContext.SaveChangesAsync();
+
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+}

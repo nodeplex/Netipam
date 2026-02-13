@@ -1,0 +1,133 @@
+@using MudBlazor
+@using Microsoft.EntityFrameworkCore
+@using Netipam.Data
+
+@inject IDbContextFactory<AppDbContext> DbFactory
+
+<MudDialog>
+    <DialogContent>
+        @if (!string.IsNullOrWhiteSpace(loadError))
+        {
+            <MudAlert Severity="Severity.Error" Dense="true">@loadError</MudAlert>
+        }
+
+        <MudText Typo="Typo.subtitle2" Class="mb-2">
+            @IpAddress
+        </MudText>
+
+        <MudSelect T="string" Label="Status" @bind-Value="selectedStatusText" Dense="true">
+        <MudSelectItem Value="@("Available")">Available (clear)</MudSelectItem>
+        <MudSelectItem Value="@("Reserved")">Reserved</MudSelectItem>
+        <MudSelectItem Value="@("DHCP")">DHCP</MudSelectItem>
+        <MudSelectItem Value="@("Deprecated")">Deprecated</MudSelectItem>
+        </MudSelect>
+
+        <MudTextField T="string"
+                      Label="Notes"
+                      Lines="3"
+                      @bind-Value="notes"
+                      Class="mt-3"
+                      Dense="true" />
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Text" OnClick="Cancel">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveAsync">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public int SubnetId { get; set; }
+    [Parameter] public string IpAddress { get; set; } = "";
+
+    private string selectedStatusText = "Available";
+    private string? notes;
+    private int? existingId;
+    private string? loadError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var existing = await db.IpAssignments
+                .AsNoTracking()
+                .FirstOrDefaultAsync(a => a.SubnetId == SubnetId && a.IpAddress == IpAddress);
+
+            if (existing is not null)
+            {
+                existingId = existing.Id;
+                selectedStatusText = existing.Status switch
+                {
+                    IpReservationStatus.Reserved => "Reserved",
+                    IpReservationStatus.Dhcp => "DHCP",
+                    IpReservationStatus.Deprecated => "Deprecated",
+                    _ => "Available"
+                };
+                notes = existing.Notes;
+            }
+        }
+        catch (Exception ex)
+        {
+            loadError = ex.Message;
+        }
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task SaveAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        if (string.Equals(selectedStatusText, "Available", StringComparison.OrdinalIgnoreCase))
+        {
+            if (existingId is not null)
+            {
+                var existing = await db.IpAssignments.FindAsync(existingId.Value);
+                if (existing is not null)
+                {
+                    db.IpAssignments.Remove(existing);
+                    await db.SaveChangesAsync();
+                }
+            }
+
+            MudDialog.Close(DialogResult.Ok(true));
+            return;
+        }
+
+        var newStatus = selectedStatusText switch
+        {
+            "Reserved" => IpReservationStatus.Reserved,
+            "DHCP" => IpReservationStatus.Dhcp,
+            "Deprecated" => IpReservationStatus.Deprecated,
+            _ => IpReservationStatus.Reserved
+        };
+
+        if (existingId is null)
+        {
+            var created = new IpAssignment
+            {
+                SubnetId = SubnetId,
+                IpAddress = IpAddress,
+                Status = newStatus,
+                Notes = string.IsNullOrWhiteSpace(notes) ? null : notes.Trim(),
+                UpdatedUtc = DateTime.UtcNow
+            };
+            db.IpAssignments.Add(created);
+        }
+        else
+        {
+            var existing = await db.IpAssignments.FindAsync(existingId.Value);
+            if (existing is not null)
+            {
+                existing.Status = newStatus;
+                existing.Notes = string.IsNullOrWhiteSpace(notes) ? null : notes.Trim();
+                existing.UpdatedUtc = DateTime.UtcNow;
+            }
+        }
+
+        await db.SaveChangesAsync();
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+}

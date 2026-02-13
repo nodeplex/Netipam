@@ -1,0 +1,202 @@
+﻿@using MudBlazor
+@using Netipam.Data
+
+@inject AppDbContext DbContext
+
+<MudDialog>
+    <DialogContent>
+        <MudForm @ref="form">
+            <MudStack Spacing="2">
+
+                <MudTextField T="string"
+                              Label="Name"
+                              @bind-Value="subnet.Name"
+                              Required="true"
+                              RequiredError="Name is required."
+                              Immediate="true"
+                              Disabled="@busy" />
+
+                <MudTextField T="string"
+                              Label="CIDR (e.g. 192.168.1.0/24)"
+                              Text="@subnet.Cidr"
+                              TextChanged="@OnCidrChanged"
+                              Required="true"
+                              Immediate="true"
+                              Validation="ValidateCidr"
+                              RequiredError="CIDR is required."
+                              Disabled="@busy" />
+
+                @if (!string.IsNullOrWhiteSpace(cidrPreview))
+                {
+                    <MudPaper Class="pa-3" Elevation="0" Outlined="true">
+                        <MudText Typo="Typo.body2" Style="white-space:pre-line;">
+                            @cidrPreview
+                        </MudText>
+                    </MudPaper>
+                }
+
+                <MudDivider Class="my-2" />
+
+                <MudTextField T="string"
+                              Label="DHCP Start"
+                              @bind-Value="subnet.DhcpRangeStart"
+                              Placeholder="e.g. 192.168.1.50"
+                              Immediate="true"
+                              Disabled="@busy" />
+
+                <MudTextField T="string"
+                              Label="DHCP End"
+                              @bind-Value="subnet.DhcpRangeEnd"
+                              Placeholder="e.g. 192.168.1.200"
+                              Immediate="true"
+                              Disabled="@busy" />
+
+                <MudDivider Class="my-2" />
+
+                <MudTextField T="string"
+                              Label="DNS 1"
+                              @bind-Value="subnet.Dns1"
+                              Placeholder="e.g. 1.1.1.1 or Auto"
+                              Immediate="true"
+                              Disabled="@busy" />
+
+                <MudTextField T="string"
+                              Label="DNS 2"
+                              @bind-Value="subnet.Dns2"
+                              Placeholder="e.g. 8.8.8.8"
+                              Immediate="true"
+                              Disabled="@busy" />
+
+                <MudDivider Class="my-2" />
+
+                <MudNumericField T="int?"
+                                 Label="VLAN ID"
+                                 @bind-Value="subnet.VlanId"
+                                 Min="1"
+                                 Max="4094"
+                                 Immediate="true"
+                                 Disabled="@busy" />
+
+                <MudDivider Class="my-2" />
+
+                <MudTextField T="string"
+                              Label="Description"
+                              @bind-Value="subnet.Description"
+                              Lines="3"
+                              Immediate="true"
+                              Disabled="@busy" />
+
+            </MudStack>
+        </MudForm>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Text"
+                   Color="Color.Secondary"
+                   Disabled="@busy"
+                   OnClick="Cancel">
+            Cancel
+        </MudButton>
+
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   Disabled="@busy"
+                   OnClick="Save">
+            @if (busy)
+            {
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="me-2" />
+                <span>Saving…</span>
+            }
+            else
+            {
+                <span>Add Subnet</span>
+            }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private MudForm? form;
+    private bool busy;
+
+    private Subnet subnet = new();
+    private string? cidrPreview;
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private string? ValidateCidr(string value)
+    {
+        if (IpCidr.TryParseIPv4Cidr(value, out _, out var error))
+            return null;
+
+        return error;
+    }
+
+    private Task OnCidrChanged(string value)
+    {
+        subnet.Cidr = value;
+
+        if (IpCidr.TryParseIPv4Cidr(value, out var info, out _))
+        {
+            var usableRange =
+                info.PrefixLength == 32
+                    ? $"{info.Network} (single host)"
+                    : info.PrefixLength == 31
+                        ? $"{info.Network} – {info.Broadcast} (/31)"
+                        : (info.FirstUsable is not null && info.LastUsable is not null
+                            ? $"{info.FirstUsable} – {info.LastUsable}"
+                            : "—");
+
+            cidrPreview =
+                $"Network: {info.Network} | Broadcast: {info.Broadcast}\n" +
+                $"Usable: {usableRange}\n" +
+                $"Usable count: {info.UsableAddresses} / {info.TotalAddresses}";
+        }
+        else
+        {
+            cidrPreview = null;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task Save()
+    {
+        if (form is null)
+            return;
+
+        await form.Validate();
+        if (!form.IsValid)
+            return;
+
+        // Extra safety: validate CIDR before save
+        if (string.IsNullOrWhiteSpace(subnet.Cidr) || !IpCidr.TryParseIPv4Cidr(subnet.Cidr, out _, out _))
+            return;
+
+        if (busy) return;
+        busy = true;
+
+        try
+        {
+            subnet.Name = subnet.Name?.Trim() ?? "";
+            subnet.Cidr = subnet.Cidr.Trim();
+            subnet.DhcpRangeStart = subnet.DhcpRangeStart?.Trim();
+            subnet.DhcpRangeEnd = subnet.DhcpRangeEnd?.Trim();
+            subnet.Dns1 = subnet.Dns1?.Trim();
+            subnet.Dns2 = subnet.Dns2?.Trim();
+            subnet.VlanId = subnet.VlanId;
+            subnet.Description = subnet.Description?.Trim();
+
+            DbContext.Subnets.Add(subnet);
+            await DbContext.SaveChangesAsync();
+
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+}

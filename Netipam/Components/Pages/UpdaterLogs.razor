@@ -1,0 +1,265 @@
+@page "/logs"
+@rendermode InteractiveServer
+
+@using Microsoft.EntityFrameworkCore
+@using MudBlazor
+@using Netipam.Data
+
+@inject AppDbContext DbContext
+@inject NavigationManager Nav
+
+<MudStack Spacing="2">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <MudText Typo="Typo.h6">Updater Logs</MudText>
+        <MudSpacer />
+        <MudCheckBox T="bool" Dense="true" Label="Errors only" @bind-Value="showErrorsOnly" />
+        <MudCheckBox T="bool" Dense="true" Label="With changes" @bind-Value="showChangesOnly" />
+        <MudDateRangePicker Dense="true"
+                            Placeholder="Date range"
+                            Clearable="true"
+                            @bind-DateRange="dateRange" />
+        <MudTextField T="string"
+                      Dense="true"
+                      Placeholder="Search (device, IP, field, old/new, error...)"
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Filled.Search"
+                      Immediate="true"
+                      Class="ms-2"
+                      @bind-Value="search" />
+        @if (loading || isRefreshing)
+        {
+            <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="toolbar-button download-icon-btn" Style="width:26px;height:26px;" />
+        }
+        else
+        {
+            <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                           Title="Refresh"
+                           Size="Size.Medium"
+                           Class="toolbar-button download-icon-btn"
+                           OnClick="ReloadWithSpinner" />
+        }
+        <MudMenu Dense="true" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Class="download-menu">
+            <ActivatorContent>
+                <MudIconButton Icon="@Icons.Material.Filled.Download"
+                               Title="Export Logs"
+                               Size="Size.Medium"
+                               Class="toolbar-button download-icon-btn export-icon" />
+            </ActivatorContent>
+            <ChildContent>
+                <MudMenuItem Href="/export/updater-logs.xlsx">Export Logs</MudMenuItem>
+            </ChildContent>
+        </MudMenu>
+    </MudStack>
+
+    @if (loading)
+    {
+        <MudProgressLinear Indeterminate="true" />
+    }
+    else if (FilteredRuns.Count == 0)
+    {
+        <MudText Typo="Typo.body2">No updater runs in the last 24 hours.</MudText>
+    }
+    else
+    {
+        <MudExpansionPanels MultiExpansion="true">
+            @foreach (var run in FilteredRuns)
+            {
+                <MudExpansionPanel Text="@BuildRunTitle(run)">
+                    <MudStack Spacing="1">
+                        @if (!string.IsNullOrWhiteSpace(run.Error))
+                        {
+                            <MudAlert Severity="Severity.Error" Dense="true">@run.Error</MudAlert>
+                        }
+
+                        <MudText Typo="Typo.caption">
+                            Started: @FormatAbs(run.StartedAtUtc) · Duration: @FormatDuration(run.DurationMs)
+                        </MudText>
+
+                        @if (GetChangesForRun(run).Count == 0)
+                        {
+                            <MudText Typo="Typo.body2" Class="mt-2">No changes recorded.</MudText>
+                        }
+                        else
+                        {
+                            var changes = GetChangesForRun(run);
+                            var useFixedHeader = changes.Count > 8;
+
+                            <MudTable T="UpdaterChangeLog"
+                                      Items="changes"
+                                      FixedHeader="@useFixedHeader"
+                                      Height="@(useFixedHeader ? "40vh" : null)"
+                                      Dense="true"
+                                      Hover="true"
+                                      Bordered="true"
+                                      Striped="true"
+                                      RowStyleFunc="@( (c, _) => GetChangeRowStyle(c) )"
+                                      Class="mt-2">
+                                <HeaderContent>
+                                    <MudTh>Device</MudTh>
+                                    <MudTh>IP</MudTh>
+                                    <MudTh>Field</MudTh>
+                                    <MudTh>Old</MudTh>
+                                    <MudTh>New</MudTh>
+                                </HeaderContent>
+                                <RowTemplate Context="c">
+                                    <MudTd DataLabel="Device">@c.DeviceName</MudTd>
+                                    <MudTd DataLabel="IP">@c.IpAddress</MudTd>
+                                    <MudTd DataLabel="Field">@c.FieldName</MudTd>
+                                    <MudTd DataLabel="Old">@c.OldValue</MudTd>
+                                    <MudTd DataLabel="New">@c.NewValue</MudTd>
+                                </RowTemplate>
+                            </MudTable>
+                        }
+                    </MudStack>
+                </MudExpansionPanel>
+            }
+        </MudExpansionPanels>
+    }
+</MudStack>
+
+<style>
+    .download-icon-btn {
+        height: 26px;
+        width: 26px;
+        padding: 0;
+    }
+
+    .export-icon {
+    }
+
+    .download-menu {
+        margin-right: 20px;
+    }
+</style>
+
+@code {
+    private bool loading = true;
+    private bool isRefreshing;
+    private List<UpdaterRunLog> runs = new();
+    private string? search;
+    private bool showErrorsOnly;
+    private bool showChangesOnly;
+    private DateRange? dateRange;
+
+    protected override async Task OnInitializedAsync()
+        => await Reload();
+
+    private async Task ReloadWithSpinner()
+    {
+        if (isRefreshing)
+            return;
+
+        isRefreshing = true;
+        await Reload();
+        await Task.Delay(300);
+        isRefreshing = false;
+    }
+
+    private async Task Reload()
+    {
+        loading = true;
+
+        var cutoff = DateTime.UtcNow.AddHours(-24);
+        runs = await DbContext.UpdaterRunLogs
+            .AsNoTracking()
+            .Include(r => r.Changes)
+            .Where(r => r.StartedAtUtc >= cutoff)
+            .OrderByDescending(r => r.StartedAtUtc)
+            .ToListAsync();
+
+        loading = false;
+    }
+
+    private List<UpdaterRunLog> FilteredRuns
+    {
+        get
+        {
+            var range = GetDateRangeUtc();
+            return runs.Where(r =>
+                    (!showErrorsOnly || !string.IsNullOrWhiteSpace(r.Error)) &&
+                    (!showChangesOnly || r.Changes.Count > 0) &&
+                    (!HasDateRange || (range is not null &&
+                                       r.StartedAtUtc >= range.Value.StartUtc &&
+                                       r.StartedAtUtc < range.Value.EndUtcExclusive)) &&
+                    (!HasSearch || RunMatches(r)))
+                .ToList();
+        }
+    }
+
+    private List<UpdaterChangeLog> GetChangesForRun(UpdaterRunLog run)
+    {
+        if (!HasSearch)
+            return run.Changes;
+
+        var term = search!.Trim();
+        return run.Changes
+            .Where(c =>
+                Contains(c.DeviceName, term) ||
+                Contains(c.IpAddress, term) ||
+                Contains(c.FieldName, term) ||
+                Contains(c.OldValue, term) ||
+                Contains(c.NewValue, term))
+            .ToList();
+    }
+
+    private bool HasSearch => !string.IsNullOrWhiteSpace(search);
+
+    private bool HasDateRange
+        => dateRange?.Start is not null && dateRange?.End is not null;
+
+    private (DateTime StartUtc, DateTime EndUtcExclusive)? GetDateRangeUtc()
+    {
+        if (!HasDateRange)
+            return null;
+
+        var startLocal = dateRange!.Start!.Value.Date;
+        var endLocalExclusive = dateRange.End!.Value.Date.AddDays(1);
+
+        var startUtc = DateTime.SpecifyKind(startLocal, DateTimeKind.Local).ToUniversalTime();
+        var endUtc = DateTime.SpecifyKind(endLocalExclusive, DateTimeKind.Local).ToUniversalTime();
+
+        return (startUtc, endUtc);
+    }
+
+    private bool RunMatches(UpdaterRunLog run)
+        => Contains(run.Error, search!)
+           || run.Changes.Any(c =>
+               Contains(c.DeviceName, search!) ||
+               Contains(c.IpAddress, search!) ||
+               Contains(c.FieldName, search!) ||
+               Contains(c.OldValue, search!) ||
+               Contains(c.NewValue, search!));
+
+    private static string BuildRunTitle(UpdaterRunLog run)
+        => $"{FormatAbs(run.StartedAtUtc)} · {run.ChangedCount} changes";
+
+    private static string FormatAbs(DateTime utc)
+        => DateTime.SpecifyKind(utc, DateTimeKind.Utc).ToLocalTime().ToString("MM-dd-yyyy HH:mm");
+
+    private static string FormatDuration(int? ms)
+    {
+        if (ms is null) return "-";
+        var t = TimeSpan.FromMilliseconds(ms.Value);
+        return t.TotalSeconds < 60
+            ? $"{(int)t.TotalSeconds}s"
+            : $"{(int)t.TotalMinutes}m {t.Seconds}s";
+    }
+
+    private static bool Contains(string? value, string term)
+        => !string.IsNullOrWhiteSpace(value) &&
+           value.Contains(term, StringComparison.OrdinalIgnoreCase);
+
+    private static string? GetChangeRowStyle(UpdaterChangeLog change)
+    {
+        if (!string.Equals(change.FieldName, "OnlineStatus", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        if (string.Equals(change.NewValue, "Online", StringComparison.OrdinalIgnoreCase))
+            return "background-color: rgba(76, 175, 80, 0.12);";
+
+        if (string.Equals(change.NewValue, "Offline", StringComparison.OrdinalIgnoreCase))
+            return "background-color: rgba(244, 67, 54, 0.12);";
+
+        return null;
+    }
+}

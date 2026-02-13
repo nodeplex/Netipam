@@ -1,0 +1,422 @@
+﻿@page "/clients/offline"
+@page "/subnets/{SubnetId:int}/clients/offline"
+@rendermode InteractiveServer
+
+@using MudBlazor
+@using Microsoft.EntityFrameworkCore
+@using Netipam.Data
+@using Netipam.Services
+
+@implements IDisposable
+
+@inject AppDbContext DbContext
+@inject AppSettingsService SettingsService
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+
+<MudStack Spacing="2">
+
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                       Title="Back to Dashboard"
+                       OnClick="@(() => Nav.NavigateTo("/"))" />
+
+        <MudText Typo="Typo.h5">
+            @(_subnetName is null
+                        ? "Offline Clients"
+                        : $"Offline Clients — {_subnetName}")
+        </MudText>
+
+        <MudSpacer />
+
+        <MudButton Variant="Variant.Outlined" OnClick="Reload">
+            Refresh
+        </MudButton>
+
+        <MudTextField T="string"
+                      Dense="true"
+                      Placeholder="Search (name, type, hostname, IP, MAC, conn, where...)"
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Filled.Search"
+                      Immediate="true"
+                      Style="min-width: 360px;"
+                      @bind-Value="search" />
+
+        <MudCheckBox T="bool"
+                     Dense="true"
+                     Label="Hide ignored offline devices"
+                     @bind-Value="hideIgnored" />
+    </MudStack>
+
+    @if (!string.IsNullOrWhiteSpace(error))
+    {
+        <MudAlert Severity="Severity.Error" Dense="true">@error</MudAlert>
+    }
+
+    @if (loading)
+    {
+        <MudProgressLinear Indeterminate="true" />
+    }
+    else
+    {
+        <MudTable T="Device"
+                  Items="@Filtered"
+                  Dense="true"
+                  Hover="true"
+                  Bordered="true"
+                  Striped="true">
+
+            <HeaderContent>
+                <MudTh style="width:28px;"></MudTh>
+                <MudTh>Name</MudTh>
+                <MudTh>Type</MudTh>
+                <MudTh>Hostname</MudTh>
+                <MudTh>
+                    <MudTableSortLabel SortBy="@(new Func<Device, object>(d => IpSortKey(d.IpAddress)))">
+                        IP
+                    </MudTableSortLabel>
+                </MudTh>
+                <MudTh>Subnet</MudTh>
+                <MudTh>Location</MudTh>
+                <MudTh>MAC</MudTh>
+                <MudTh style="width:54px;">Conn</MudTh>
+                <MudTh>Where</MudTh>
+                <MudTh style="width:180px;">
+                    <MudTableSortLabel SortBy="@(new Func<Device, object>(d => d.LastOnlineAt ?? DateTime.MinValue))">
+                        Last Online
+                    </MudTableSortLabel>
+                </MudTh>
+                <MudTh style="width:120px;"></MudTh>
+            </HeaderContent>
+
+            <RowTemplate Context="d">
+                <MudTd DataLabel="Status">
+                    @if (showLastSeenTooltips)
+                    {
+                        <MudTooltip Text="@GetStatusTooltip(d)">
+                            <MudIcon Icon="@Icons.Material.Filled.Circle" Color="Color.Error" Size="Size.Small" />
+                        </MudTooltip>
+                    }
+                    else
+                    {
+                        <MudIcon Icon="@Icons.Material.Filled.Circle" Color="Color.Error" Size="Size.Small" />
+                    }
+                </MudTd>
+
+                <MudTd DataLabel="Name">@d.Name</MudTd>
+                <MudTd DataLabel="Type">@Safe(d.ClientType?.Name, "—")</MudTd>
+                <MudTd DataLabel="Hostname">@Safe(d.Hostname, "—")</MudTd>
+                <MudTd DataLabel="IP">@Safe(d.IpAddress, "—")</MudTd>
+
+                <MudTd DataLabel="Subnet">
+                    @if (d.Subnet is not null)
+                    {
+                        <MudLink Href="@($"/subnets/{d.Subnet.Id}/ips")" Underline="Underline.Hover">
+                            @d.Subnet.Name
+                        </MudLink>
+                    }
+                    else
+                    {
+                        <span>-</span>
+                    }
+                </MudTd>
+
+                <MudTd DataLabel="Location">
+                    @Safe(d.LocationRef?.Name ?? d.Location, "—")
+                </MudTd>
+
+                <MudTd DataLabel="MAC">@Safe(d.MacAddress, "—")</MudTd>
+
+                <MudTd DataLabel="Conn">
+                    @if (!string.IsNullOrWhiteSpace(d.ConnectionType))
+                    {
+                        <MudTooltip Text="@GetConnTooltip(d)">
+                            <MudIcon Icon="@(IsWifi(d.ConnectionType) ? Icons.Material.Filled.Wifi : Icons.Material.Filled.SettingsEthernet)"
+                                     Color="@(IsWifi(d.ConnectionType) ? GetWifiColor(d.ConnectionDetail) : Color.Default)"
+                                     Size="Size.Small" />
+                        </MudTooltip>
+                    }
+                </MudTd>
+
+                <MudTd DataLabel="Where">
+                    @if (IsWifi(d.ConnectionType))
+                    {
+                        <MudTooltip Text="@Safe(d.ConnectionDetail, "—")">
+                            @GetApOnly(d.ConnectionDetail)
+                        </MudTooltip>
+                    }
+                    else
+                    {
+                        @Safe(d.ConnectionDetail, "—")
+                    }
+                </MudTd>
+
+                <MudTd DataLabel="Last Online">
+                    @FormatAbsRel(d.LastOnlineAt)
+                </MudTd>
+
+                <MudTd DataLabel="Actions">
+                    <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                   Color="Color.Info"
+                                   Size="Size.Small"
+                                   Title="Edit"
+                                   OnClick="@(() => OpenEditDeviceDialog(d))" />
+
+                    <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                   Color="Color.Error"
+                                   Size="Size.Small"
+                                   Title="Delete"
+                                   OnClick="@(() => ConfirmDeleteDevice(d))" />
+                </MudTd>
+            </RowTemplate>
+
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Class="pa-4">No offline entries found.</MudText>
+            </NoRecordsContent>
+        </MudTable>
+    }
+</MudStack>
+
+@code {
+    [Parameter] public int? SubnetId { get; set; }
+
+    private bool loading = true;
+    private string? error;
+    private string? search;
+
+    private bool showLastSeenTooltips = true;
+
+    private bool hideIgnored = true;
+
+    private string? _subnetName;
+    private List<Device> rows = new();
+
+    private CancellationTokenSource? _refreshCts;
+    private Task? _refreshLoop;
+
+    protected override async Task OnInitializedAsync()
+    {
+        SettingsService.SettingsChanged += OnSettingsChanged;
+
+        var s = await SettingsService.LoadAsync();
+        ApplyUiSettings(s);
+        StartOrRestartAutoRefresh(s.UiAutoRefreshSeconds);
+
+        await Reload();
+    }
+
+    private void OnSettingsChanged(AppSetting s)
+    {
+        ApplyUiSettings(s);
+        StartOrRestartAutoRefresh(s.UiAutoRefreshSeconds);
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void ApplyUiSettings(AppSetting s)
+    {
+        showLastSeenTooltips = s.ShowLastSeenTooltips;
+    }
+
+    public void Dispose()
+    {
+        StopAutoRefresh();
+        SettingsService.SettingsChanged -= OnSettingsChanged;
+    }
+
+    private void StartOrRestartAutoRefresh(int seconds)
+    {
+        StopAutoRefresh();
+
+        if (seconds <= 0)
+            return;
+
+        var interval = TimeSpan.FromSeconds(Math.Clamp(seconds, 5, 3600));
+        _refreshCts = new CancellationTokenSource();
+        var ct = _refreshCts.Token;
+
+        _refreshLoop = Task.Run(async () =>
+        {
+            try
+            {
+                var timer = new PeriodicTimer(interval);
+                while (await timer.WaitForNextTickAsync(ct))
+                {
+                    await Reload();
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+            catch (OperationCanceledException) { }
+        }, ct);
+    }
+
+    private void StopAutoRefresh()
+    {
+        try { _refreshCts?.Cancel(); } catch { }
+        _refreshCts?.Dispose();
+        _refreshCts = null;
+        _refreshLoop = null;
+    }
+
+    private async Task Reload()
+    {
+        loading = true;
+        error = null;
+
+        try
+        {
+            if (SubnetId is not null)
+            {
+                _subnetName = await DbContext.Subnets
+                    .AsNoTracking()
+                    .Where(s => s.Id == SubnetId.Value)
+                    .Select(s => s.Name)
+                    .FirstOrDefaultAsync();
+            }
+            else
+            {
+                _subnetName = null;
+            }
+
+            var q = DbContext.Devices
+                .AsNoTracking()
+                .Include(d => d.Subnet)
+                .Include(d => d.ClientType)
+                .Include(d => d.LocationRef)
+            .Where(d => d.IsStatusTracked && d.IsOnline == false);
+
+            if (SubnetId is not null)
+                q = q.Where(d => d.SubnetId == SubnetId.Value);
+
+            rows = await q
+                .OrderBy(d => d.Name)
+                .ToListAsync();
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private IEnumerable<Device> Filtered
+    {
+        get
+        {
+            IEnumerable<Device> q = rows;
+
+            if (hideIgnored)
+                q = q.Where(d => !d.IgnoreOffline);
+
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                var s = search.Trim();
+                q = q.Where(d =>
+                    Contains(d.Name, s) ||
+                    Contains(d.ClientType?.Name, s) ||
+                    Contains(d.Hostname, s) ||
+                    Contains(d.IpAddress, s) ||
+                    Contains(d.MacAddress, s) ||
+                    Contains(d.Subnet?.Name, s) ||
+                    Contains(d.ConnectionType, s) ||
+                    Contains(d.ConnectionDetail, s)
+                );
+            }
+
+            return q;
+        }
+    }
+
+    private static bool Contains(string? haystack, string needle)
+        => !string.IsNullOrWhiteSpace(haystack)
+           && haystack.Contains(needle, StringComparison.OrdinalIgnoreCase);
+
+    private static uint IpSortKey(string? ip)
+    {
+        if (string.IsNullOrWhiteSpace(ip))
+            return uint.MaxValue;
+
+        return IpCidr.TryParseIPv4(ip.Trim(), out var ipUInt, out _)
+            ? ipUInt
+            : uint.MaxValue;
+    }
+
+    private static bool IsWifi(string? connectionType)
+        => !string.IsNullOrWhiteSpace(connectionType)
+           && connectionType.Trim().Equals("WiFi", StringComparison.OrdinalIgnoreCase);
+
+    private static string GetApOnly(string? detail)
+    {
+        if (string.IsNullOrWhiteSpace(detail))
+            return "—";
+
+        var parts = detail.Split('•', 2, StringSplitOptions.TrimEntries);
+        return parts.Length > 0 && !string.IsNullOrWhiteSpace(parts[0]) ? parts[0] : detail;
+    }
+
+    private static string GetConnTooltip(Device d)
+    {
+        var ct = Safe(d.ConnectionType, "—");
+        var cd = Safe(d.ConnectionDetail, "—");
+        return cd == "—" ? ct : $"{ct} • {cd}";
+    }
+
+    private static string GetStatusTooltip(Device d)
+        => $"Last Online: {FormatAbsRel(d.LastOnlineAt)}";
+
+    private static string FormatAbsRel(DateTime? utc)
+    {
+        if (utc is null) return "—";
+
+        var local = DateTime.SpecifyKind(utc.Value, DateTimeKind.Utc).ToLocalTime();
+        var abs = local.ToString("MM-dd-yyyy HH:mm");
+        var rel = ToRelative(DateTime.UtcNow - utc.Value);
+        return $"{abs} ({rel})";
+    }
+
+    private static string ToRelative(TimeSpan age)
+    {
+        if (age < TimeSpan.Zero) age = TimeSpan.Zero;
+        if (age.TotalSeconds < 60) return "just now";
+        if (age.TotalMinutes < 60) return $"{(int)age.TotalMinutes}m ago";
+        if (age.TotalHours < 48) return $"{(int)age.TotalHours}h ago";
+        return $"{(int)age.TotalDays}d ago";
+    }
+
+    // -----------------------------
+    // Actions
+    // -----------------------------
+    private async Task OpenEditDeviceDialog(Device device)
+    {
+        var isDevice = device.ClientType?.IsDevice == true;
+        var title = isDevice ? "Edit Device" : "Edit Client";
+
+        var parameters = new DialogParameters { ["DeviceId"] = device.Id };
+        var dialog = DialogService.ShowStandard<EditDeviceDialog>(title, parameters);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+            await Reload();
+    }
+
+    private async Task ConfirmDeleteDevice(Device device)
+    {
+        var confirm = await DialogService.ShowMessageBox(
+            title: "Delete entry?",
+            message: $"Are you sure you want to delete '{device.Name}'?",
+            yesText: "Delete",
+            cancelText: "Cancel");
+
+        if (confirm != true)
+            return;
+
+        DbContext.Devices.Remove(device);
+        await DbContext.SaveChangesAsync();
+
+        Snackbar.Add($"Deleted '{device.Name}'.", Severity.Success);
+        await Reload();
+    }
+}

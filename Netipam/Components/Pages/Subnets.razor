@@ -1,0 +1,519 @@
+﻿@page "/subnets"
+@rendermode InteractiveServer
+
+@using MudBlazor
+@using Netipam.Data
+@using Microsoft.EntityFrameworkCore
+@using Netipam.Services
+@using System.Text.RegularExpressions
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Security.Claims
+
+@inject AppDbContext DbContext
+@inject IDialogService DialogService
+@inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthStateProvider
+
+<MudStack Row="true"
+          AlignItems="AlignItems.Center"
+          Class="mb-4">
+
+    <MudText Typo="Typo.h6">Subnets</MudText>
+
+    <MudSpacer />
+
+    <MudStack Row="true" Spacing="1">
+        @if (_canEdit)
+        {
+        <MudIconButton Icon="@Icons.Material.Filled.AddBox"
+                       Title="Add Subnet"
+                       Size="Size.Medium"
+                       Class="toolbar-button download-icon-btn"
+                       OnClick="@(() => OpenAddSubnetDialog())" />
+    }
+        <MudMenu Dense="true" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Class="download-menu">
+            <ActivatorContent>
+                <MudIconButton Icon="@Icons.Material.Filled.Download"
+                               Title="Export"
+                               Size="Size.Medium"
+                               Class="toolbar-button download-icon-btn" />
+            </ActivatorContent>
+            <ChildContent>
+                <MudMenuItem Href="/export/subnets.xlsx">Export Subnets</MudMenuItem>
+                <MudMenuItem Href="/export/all.xlsx?perSubnetTabs=true">Master Export</MudMenuItem>
+            </ChildContent>
+        </MudMenu>
+    </MudStack>
+</MudStack>
+
+<style>
+    .download-menu {
+        margin-right: 12px;
+    }
+</style>
+
+<MudTable T="Subnet"
+          Items="@subnets"
+          FixedHeader="true"
+          Height="calc(100vh - 130px)"
+          Hover="true"
+          Dense="true"
+          Bordered="true"
+          Striped="true">
+
+    <HeaderContent>
+        <MudTh>Name</MudTh>
+        <MudTh>CIDR</MudTh>
+        <MudTh>Usable Range</MudTh>
+        <MudTh style="text-align:center;">Usable</MudTh>
+        <MudTh style="text-align:center;">Used IPs</MudTh>
+        <MudTh style="text-align:center;">Clients</MudTh>
+        <MudTh style="text-align:center;">Devices</MudTh>
+        <MudTh style="text-align:center;">Offline</MudTh>
+        <MudTh>DHCP Range</MudTh>
+        <MudTh>VLAN</MudTh>
+        <MudTh>DNS</MudTh>
+        <MudTh>Next Available IPs</MudTh>
+        <MudTh>Description</MudTh>
+        <MudTh style="width:150px; white-space:nowrap;"></MudTh>
+    </HeaderContent>
+
+    <RowTemplate Context="subnet">
+        <MudTd DataLabel="Name">@subnet.Name</MudTd>
+        <MudTd DataLabel="CIDR">@subnet.Cidr</MudTd>
+
+        <MudTd DataLabel="Usable Range">
+            @FormatUsableRange(subnet.Cidr)
+        </MudTd>
+
+        <MudTd DataLabel="Usable" Align="Align.Center" Style="text-align:center;">
+            @FormatUsableCount(subnet.Cidr)
+        </MudTd>
+
+        <MudTd DataLabel="Used IPs" Align="Align.Center" Style="text-align:center;">
+            @GetCount(usedIpCounts, subnet.Id)
+        </MudTd>
+
+        <MudTd DataLabel="Clients" Align="Align.Center" Style="text-align:center;">
+            @GetCount(clientCounts, subnet.Id)
+        </MudTd>
+
+        <MudTd DataLabel="Devices" Align="Align.Center" Style="text-align:center;">
+            @GetCount(deviceCounts, subnet.Id)
+        </MudTd>
+
+        <MudTd DataLabel="Offline" Align="Align.Center" Style="text-align:center;">
+            @GetCount(offlineCounts, subnet.Id)
+        </MudTd>
+
+        <MudTd DataLabel="DHCP Range">
+            @FormatDhcpRange(subnet)
+        </MudTd>
+
+        <MudTd DataLabel="VLAN">
+            @FormatVlan(subnet.VlanId)
+        </MudTd>
+
+        <MudTd DataLabel="DNS">
+            @DnsCell(subnet)
+        </MudTd>
+
+        <MudTd DataLabel="Next Available IPs">
+            @FormatNextFreeIps(subnet.Id)
+        </MudTd>
+
+        <MudTd DataLabel="Description">@(string.IsNullOrWhiteSpace(subnet.Description) ? "-" : subnet.Description)</MudTd>
+
+        <MudTd Style="white-space:nowrap;">
+            <MudButton Variant="Variant.Outlined"
+                       Size="Size.Small"
+                       StartIcon="@Icons.Material.Filled.List"
+                       Style="margin-right:6px;"
+                       OnClick="@(() => OpenSubnetIps(subnet.Id))">
+                IPs
+            </MudButton>
+
+            @if (_canEdit)
+            {
+                <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                               Color="Color.Info"
+                               Size="Size.Small"
+                               Title="Edit"
+                               OnClick="@(() => OpenEditSubnetDialog(subnet.Id))" />
+
+                <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                               Color="Color.Error"
+                               Size="Size.Small"
+                               Title="Delete"
+                               OnClick="@(() => ConfirmAndDeleteSubnet(subnet.Id, subnet.Cidr ?? ""))" />
+            }
+        </MudTd>
+    </RowTemplate>
+
+    <NoRecordsContent>
+        <MudText Typo="Typo.body2" Class="pa-4">
+            No subnets found. Click “Add Subnet” to create one.
+        </MudText>
+    </NoRecordsContent>
+</MudTable>
+
+@code {
+    private static readonly Regex FirstIPv4Regex =
+        new(@"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b",
+            RegexOptions.Compiled);
+
+    private List<Subnet> subnets = new();
+    private Dictionary<int, int> clientCounts = new();
+    private Dictionary<int, int> deviceCounts = new();
+    private Dictionary<int, int> offlineCounts = new();
+    private Dictionary<int, int> usedIpCounts = new();
+    private Dictionary<int, List<string>> nextFreeIps = new();
+    private bool _canEdit = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await SetPermissionsAsync();
+        await ReloadSubnetsAsync();
+    }
+
+    private async Task SetPermissionsAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        _canEdit = !user.IsInRole("Viewer");
+    }
+
+    private async Task ReloadSubnetsAsync()
+    {
+        subnets = await DbContext.Subnets
+            .AsNoTracking()
+            .OrderBy(s => s.VlanId ?? int.MaxValue)
+            .ThenBy(s => s.Cidr)
+            .ThenBy(s => s.Name)
+            .ToListAsync();
+
+        await LoadSubnetCountsAsync();
+    }
+
+    private async Task LoadSubnetCountsAsync()
+    {
+        clientCounts.Clear();
+        deviceCounts.Clear();
+        offlineCounts.Clear();
+        usedIpCounts.Clear();
+        nextFreeIps.Clear();
+
+        var subnetInfos = new Dictionary<int, IpCidr.CidrInfo>();
+        foreach (var s in subnets)
+        {
+            if (string.IsNullOrWhiteSpace(s.Cidr))
+                continue;
+
+            if (!IpCidr.TryParseIPv4Cidr(s.Cidr.Trim(), out var info, out _))
+                continue;
+
+            subnetInfos[s.Id] = info;
+        }
+
+        var devices = await DbContext.Devices
+            .AsNoTracking()
+            .Include(d => d.ClientType)
+            .Select(d => new DeviceLite(
+                d.SubnetId,
+                d.IpAddress,
+                d.IsOnline,
+                d.ClientType != null && d.ClientType.IsDevice,
+                d.IgnoreOffline,
+                d.IsStatusTracked))
+            .ToListAsync();
+
+        var assignments = await DbContext.IpAssignments
+            .AsNoTracking()
+            .ToListAsync();
+
+        var usedIpBySubnet = new Dictionary<int, HashSet<uint>>();
+        var reservedIpBySubnet = new Dictionary<int, HashSet<uint>>();
+        foreach (var subnetId in subnetInfos.Keys)
+        {
+            usedIpBySubnet[subnetId] = new HashSet<uint>();
+            reservedIpBySubnet[subnetId] = new HashSet<uint>();
+        }
+
+        foreach (var d in devices)
+        {
+            if (d.SubnetId is null)
+                continue;
+
+            if (!subnetInfos.TryGetValue(d.SubnetId.Value, out var info))
+                continue;
+
+            var extracted = ExtractFirstIPv4(d.IpAddress);
+            if (extracted is null)
+                continue;
+
+            if (!IpCidr.TryParseIPv4(extracted, out var ipUInt, out _))
+                continue;
+
+            if (ipUInt < info.NetworkUInt || ipUInt > info.BroadcastUInt)
+                continue;
+
+            usedIpBySubnet[d.SubnetId.Value].Add(ipUInt);
+        }
+
+        foreach (var a in assignments)
+        {
+            if (!subnetInfos.TryGetValue(a.SubnetId, out var info))
+                continue;
+
+            var extracted = ExtractFirstIPv4(a.IpAddress);
+            if (extracted is null)
+                continue;
+
+            if (!IpCidr.TryParseIPv4(extracted, out var ipUInt, out _))
+                continue;
+
+            if (ipUInt < info.NetworkUInt || ipUInt > info.BroadcastUInt)
+                continue;
+
+            if (!reservedIpBySubnet.TryGetValue(a.SubnetId, out var set))
+                continue;
+
+            set.Add(ipUInt);
+        }
+
+        foreach (var entry in usedIpBySubnet)
+            usedIpCounts[entry.Key] = entry.Value.Count;
+
+        foreach (var (subnetId, info) in subnetInfos)
+        {
+            if (!usedIpBySubnet.TryGetValue(subnetId, out var usedSet))
+                usedSet = new HashSet<uint>();
+            if (!reservedIpBySubnet.TryGetValue(subnetId, out var reservedSet))
+                reservedSet = new HashSet<uint>();
+
+            var subnet = subnets.FirstOrDefault(s => s.Id == subnetId);
+            nextFreeIps[subnetId] = FindNextFreeIps(info, subnet?.DhcpRangeStart, subnet?.DhcpRangeEnd, usedSet, reservedSet, 3);
+        }
+
+        clientCounts = devices
+            .Where(d => d.SubnetId != null && !d.IsDevice)
+            .GroupBy(d => d.SubnetId!.Value)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        deviceCounts = devices
+            .Where(d => d.SubnetId != null && d.IsDevice)
+            .GroupBy(d => d.SubnetId!.Value)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        offlineCounts = devices
+            .Where(d => d.SubnetId != null && d.IsStatusTracked && !d.IsOnline && !d.IgnoreOffline)
+            .GroupBy(d => d.SubnetId!.Value)
+            .ToDictionary(g => g.Key, g => g.Count());
+    }
+
+    private void OpenSubnetIps(int subnetId)
+    {
+        // Option 1: dedicated subnet IP list page
+        Nav.NavigateTo($"/subnets/{subnetId}/ips");
+    }
+
+    private async Task OpenAddSubnetDialog()
+    {
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Large, FullWidth = true };
+        var dialog = DialogService.Show<AddSubnetDialog>("Add Subnet", options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+            await ReloadSubnetsAsync();
+    }
+
+    private async Task OpenEditSubnetDialog(int subnetId)
+    {
+        var parameters = new DialogParameters { ["SubnetId"] = subnetId };
+
+        var dialog = DialogService.ShowStandard<EditSubnetDialog>(
+            "Edit Subnet",
+            parameters,
+            maxWidth: MaxWidth.Medium,   // override if needed
+            fullWidth: true);
+
+        var result = await dialog.Result;
+        if (!result.Canceled)
+            await ReloadSubnetsAsync();
+    }
+
+
+    private async Task ConfirmAndDeleteSubnet(int subnetId, string cidr)
+    {
+        bool? confirmed = await DialogService.ShowMessageBox(
+            title: "Delete subnet?",
+            markupMessage: (MarkupString)$"Are you sure you want to delete <b>{cidr}</b>?",
+            yesText: "Delete",
+            cancelText: "Cancel");
+
+        if (confirmed != true)
+            return;
+
+        var entity = await DbContext.Subnets.FindAsync(subnetId);
+        if (entity is null)
+        {
+            await ReloadSubnetsAsync();
+            return;
+        }
+
+        DbContext.Subnets.Remove(entity);
+        await DbContext.SaveChangesAsync();
+
+        await ReloadSubnetsAsync();
+    }
+
+    private string FormatUsableRange(string? cidr)
+    {
+        if (string.IsNullOrWhiteSpace(cidr))
+            return "—";
+
+        if (!IpCidr.TryParseIPv4Cidr(cidr, out var info, out _))
+            return "—";
+
+        // /32
+        if (info.PrefixLength == 32)
+            return $"{info.Network} (single host)";
+
+        // /31 (both usable)
+        if (info.PrefixLength == 31)
+            return $"{info.Network} – {info.Broadcast} (/31)";
+
+        // /30..0 (normal)
+        if (info.FirstUsable is null || info.LastUsable is null)
+            return "—";
+
+        return $"{info.FirstUsable} – {info.LastUsable}";
+    }
+
+    private string FormatUsableCount(string? cidr)
+    {
+        if (string.IsNullOrWhiteSpace(cidr))
+            return "-";
+
+        if (!IpCidr.TryParseIPv4Cidr(cidr, out var info, out _))
+            return "-";
+
+        return $"{info.UsableAddresses} / {info.TotalAddresses}";
+    }
+
+    private static string FormatDhcpRange(Subnet s)
+    {
+        var start = s.DhcpRangeStart?.Trim();
+        var end = s.DhcpRangeEnd?.Trim();
+
+        if (string.IsNullOrWhiteSpace(start) && string.IsNullOrWhiteSpace(end))
+            return "-";
+
+        if (!string.IsNullOrWhiteSpace(start) && !string.IsNullOrWhiteSpace(end))
+            return $"{start} - {end}";
+
+        return start ?? end ?? "-";
+    }
+
+    private static string FormatVlan(int? vlan)
+        => vlan.HasValue ? vlan.Value.ToString() : "-";
+
+    private static RenderFragment DnsCell(Subnet s) => @<div style="display:flex; align-items:center; gap:8px;">
+@{
+    var d1 = s.Dns1?.Trim();
+    var d2 = s.Dns2?.Trim();
+
+    if (string.IsNullOrWhiteSpace(d1) && string.IsNullOrWhiteSpace(d2))
+    {
+        <span>—</span>
+    }
+    else
+    {
+        var isAuto = string.Equals(d1, "Auto", StringComparison.OrdinalIgnoreCase);
+        if (isAuto)
+        {
+            <MudChip T="string" Color="Color.Info" Variant="Variant.Outlined" Size="Size.Small">Auto</MudChip>
+        }
+        else
+        {
+            var showValue = string.IsNullOrWhiteSpace(d2) ? d1 : $"{d1} | {d2}";
+            <span>@showValue</span>
+        }
+    }
+}
+</div>;
+
+    private static string? ExtractFirstIPv4(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+
+        var m = FirstIPv4Regex.Match(text);
+        return m.Success ? m.Value : null;
+    }
+
+    private string FormatNextFreeIps(int subnetId)
+    {
+        if (!nextFreeIps.TryGetValue(subnetId, out var list) || list.Count == 0)
+            return "-";
+
+        return string.Join(", ", list);
+    }
+
+    private static List<string> FindNextFreeIps(
+        IpCidr.CidrInfo info,
+        string? dhcpStart,
+        string? dhcpEnd,
+        HashSet<uint> usedSet,
+        HashSet<uint> reservedSet,
+        int count)
+    {
+        var results = new List<string>();
+
+        if (string.IsNullOrWhiteSpace(info.FirstUsable) || string.IsNullOrWhiteSpace(info.LastUsable))
+            return results;
+
+        if (!IpCidr.TryParseIPv4(info.FirstUsable, out var start, out _))
+            return results;
+        if (!IpCidr.TryParseIPv4(info.LastUsable, out var end, out _))
+            return results;
+
+        uint dhcpStartVal = 0;
+        uint dhcpEndVal = 0;
+        var hasDhcpStart = IpCidr.TryParseIPv4(dhcpStart ?? "", out dhcpStartVal, out _);
+        var hasDhcpEnd = IpCidr.TryParseIPv4(dhcpEnd ?? "", out dhcpEndVal, out _);
+        if (hasDhcpStart && hasDhcpEnd && dhcpEndVal < dhcpStartVal)
+        {
+            var tmp = dhcpStartVal;
+            dhcpStartVal = dhcpEndVal;
+            dhcpEndVal = tmp;
+        }
+
+        for (uint ip = start; ip <= end && results.Count < count; ip++)
+        {
+            if (usedSet.Contains(ip))
+                continue;
+
+            if (reservedSet.Contains(ip))
+                continue;
+
+            if (hasDhcpStart && hasDhcpEnd && ip >= dhcpStartVal && ip <= dhcpEndVal)
+                continue;
+
+            results.Add(IpCidr.UIntToIPv4(ip));
+        }
+
+        return results;
+    }
+
+    private static int GetCount(IReadOnlyDictionary<int, int> map, int subnetId)
+        => map.TryGetValue(subnetId, out var count) ? count : 0;
+
+    private sealed record DeviceLite(
+        int? SubnetId,
+        string? IpAddress,
+        bool IsOnline,
+        bool IsDevice,
+        bool IgnoreOffline,
+        bool IsStatusTracked);
+}

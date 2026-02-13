@@ -1,0 +1,153 @@
+﻿@page "/alerts/offline"
+@rendermode InteractiveServer
+
+@using MudBlazor
+@using Microsoft.EntityFrameworkCore
+@using Netipam.Data
+
+@inject AppDbContext DbContext
+@inject NavigationManager Nav
+
+<MudStack Spacing="2">
+
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                       Title="Back to Dashboard"
+                       OnClick="@(() => Nav.NavigateTo("/"))" />
+        <MudText Typo="Typo.h5">Offline alerts</MudText>
+        <MudSpacer />
+        <MudButton Variant="Variant.Outlined" OnClick="Reload">Refresh</MudButton>
+    </MudStack>
+
+    <MudTable T="ClientOfflineAlert"
+              Items="alerts"
+              Dense="true"
+              Hover="true"
+              Bordered="true"
+              Striped="true">
+
+        <HeaderContent>
+            <MudTh style="width:28px;"></MudTh>
+            <MudTh>Client</MudTh>
+            <MudTh style="width:160px;">IP</MudTh>
+            <MudTh style="width:220px;">Went offline</MudTh>
+            <MudTh style="width:220px;">Recovered</MudTh>
+            <MudTh style="width:140px;"></MudTh>
+        </HeaderContent>
+
+        <RowTemplate Context="a">
+            <MudTd>
+                @if (a.CameOnlineAtUtc is null)
+                {
+                    <MudTooltip Text="Offline (not yet recovered)">
+                        <MudIcon Icon="@Icons.Material.Filled.Circle" Color="Color.Error" Size="Size.Small" />
+                    </MudTooltip>
+                }
+                else
+                {
+                    <MudTooltip Text="Recovered (back online) — still unacknowledged">
+                        <MudIcon Icon="@Icons.Material.Filled.Circle" Color="Color.Success" Size="Size.Small" />
+                    </MudTooltip>
+                }
+            </MudTd>
+
+            <MudTd>
+                <MudStack Spacing="0">
+                    <MudText Typo="Typo.body2">@Safe(a.Device?.Name ?? a.NameAtTime, "—")</MudText>
+                    <MudText Typo="Typo.caption">@Safe(a.Device?.Hostname, "—")</MudText>
+                </MudStack>
+            </MudTd>
+
+            <MudTd>@Safe(a.IpAtTime ?? a.Device?.IpAddress, "—")</MudTd>
+
+            <MudTd>@FormatAbsRel(a.WentOfflineAtUtc)</MudTd>
+
+            <MudTd>
+                @if (a.CameOnlineAtUtc is null)
+                {
+                    <span>—</span>
+                }
+                else
+                {
+
+                    @FormatAbsRel(a.CameOnlineAtUtc.Value)
+                }
+            </MudTd>
+
+            <MudTd>
+                <MudButton Variant="Variant.Filled"
+                           Color="Color.Primary"
+                           Size="Size.Small"
+                           Disabled="@ackBusy"
+                           OnClick="@(() => Acknowledge(a.Id))">
+                    Acknowledge
+                </MudButton>
+            </MudTd>
+        </RowTemplate>
+
+        <NoRecordsContent>
+            <MudText Typo="Typo.body2" Class="pa-4">No unacknowledged alerts.</MudText>
+        </NoRecordsContent>
+    </MudTable>
+
+</MudStack>
+
+@code {
+    private bool ackBusy;
+    private List<ClientOfflineAlert> alerts = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await Reload();
+    }
+
+    private async Task Reload()
+    {
+        alerts = await DbContext.ClientOfflineAlerts
+            .AsNoTracking()
+            .Include(a => a.Device)
+            .Where(a => !a.IsAcknowledged)
+            .OrderByDescending(a => a.WentOfflineAtUtc)
+            .ToListAsync();
+    }
+
+    private async Task Acknowledge(int id)
+    {
+        if (ackBusy) return;
+        ackBusy = true;
+
+        try
+        {
+            var entity = await DbContext.ClientOfflineAlerts.FirstOrDefaultAsync(a => a.Id == id);
+            if (entity is null) return;
+
+            entity.IsAcknowledged = true;
+            entity.AcknowledgedAtUtc = DateTime.UtcNow;
+
+            await DbContext.SaveChangesAsync();
+            await Reload();
+        }
+        finally
+        {
+            ackBusy = false;
+        }
+    }
+
+    private static string FormatAbsRel(DateTime utc)
+    {
+        var local = DateTime.SpecifyKind(utc, DateTimeKind.Utc).ToLocalTime();
+        var abs = local.ToString("MM-dd-yyyy HH:mm");
+        var rel = ToRelative(DateTime.UtcNow - utc);
+        return $"{abs} ({rel})";
+    }
+
+    private static string ToRelative(TimeSpan age)
+    {
+        if (age < TimeSpan.Zero) age = TimeSpan.Zero;
+        if (age.TotalSeconds < 60) return "just now";
+        if (age.TotalMinutes < 60) return $"{(int)age.TotalMinutes}m ago";
+        if (age.TotalHours < 48) return $"{(int)age.TotalHours}h ago";
+        return $"{(int)age.TotalDays}d ago";
+    }
+}
+

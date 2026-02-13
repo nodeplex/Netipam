@@ -1,0 +1,44 @@
+@using MudBlazor
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="1">
+            <MudText Typo="Typo.subtitle1">Choose columns to show</MudText>
+
+            @foreach (var option in options)
+            {
+                <MudCheckBox T="bool"
+                             @bind-Value="option.IsVisible"
+                             Label="@option.Label"
+                             Dense="true" />
+            }
+        </MudStack>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Text" Color="Color.Secondary" OnClick="Cancel">
+            Cancel
+        </MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Save">
+            Save
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public List<ColumnOption> Columns { get; set; } = new();
+
+    private List<ColumnOption> options = new();
+
+    protected override void OnInitialized()
+    {
+        options = Columns
+            .Select(c => new ColumnOption(c.Key, c.Label, c.IsVisible))
+            .ToList();
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private void Save() => MudDialog.Close(DialogResult.Ok(options));
+}

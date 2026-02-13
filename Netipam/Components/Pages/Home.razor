@@ -1,0 +1,1673 @@
+﻿@page "/"
+@rendermode InteractiveServer
+
+@using MudBlazor
+@using Microsoft.EntityFrameworkCore
+@using Netipam.Data
+@using Netipam.Services
+@using Netipam.Unifi
+@using System.Text.RegularExpressions
+
+@implements IDisposable
+
+@inject AppDbContext DbContext
+@inject AppSettingsService SettingsService
+@inject UnifiUpdaterControl UnifiUpdater
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+
+<MudStack Spacing="2">
+
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <MudText Typo="Typo.h6">Dashboard</MudText>
+        <MudSpacer />
+        <MudText Typo="Typo.caption">
+            Last update:
+            @(UnifiUpdater.LastRunUtc is null
+                ? "—"
+                : UnifiUpdater.LastRunUtc.Value.ToLocalTime().ToString(dateFormat))
+            @if (!string.IsNullOrWhiteSpace(UnifiUpdater.LastError))
+            {
+                <span> • Error: @UnifiUpdater.LastError</span>
+            }
+            else if (UnifiUpdater.LastRunUtc is not null)
+            {
+                <span> • Changed: @UnifiUpdater.LastChangedCount</span>
+            }
+        </MudText>
+        @if (loading || isRefreshing)
+        {
+            <MudProgressCircular Indeterminate="true" Size="Size.Medium" Class="toolbar-button download-icon-btn refresh-icon" Style="width:26px;height:26px;" />
+        }
+        else
+        {
+            <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                           Title="Refresh"
+                           Size="Size.Medium"
+                           Class="toolbar-button download-icon-btn refresh-icon"
+                           OnClick="ReloadWithSpinner" />
+        }
+    </MudStack>
+
+    @if (!string.IsNullOrWhiteSpace(error))
+    {
+        <MudAlert Severity="Severity.Error" Dense="true">@error</MudAlert>
+    }
+    @if (loading)
+    {
+        <MudProgressLinear Indeterminate="true" />
+    }
+    else
+    {
+        <MudGrid>
+            <MudItem xs="12" md="6">
+                @if (showWanStatus)
+                {
+                    <MudPaper Class="pa-3">
+                        <MudText Typo="Typo.subtitle2">WAN Status</MudText>
+                        @if (wanStatuses.Count == 0)
+                        {
+                            <MudText Typo="Typo.body2" Class="mt-1">No WAN data available yet.</MudText>
+                        }
+                        else
+                        {
+                            @foreach (var group in wanStatuses
+                                         .GroupBy(w => w.GatewayName ?? w.GatewayMac ?? "Gateway")
+                                         .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
+                            {
+                                var groupList = group.ToList();
+                                <MudText Typo="Typo.caption" Class="mt-1">@group.Key</MudText>
+                                <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center" Class="mt-1">
+                                    @foreach (var wan in groupList.OrderBy(w => w.InterfaceName, StringComparer.OrdinalIgnoreCase))
+                                    {
+                                        <MudChip T="string"
+                                                 Variant="Variant.Outlined"
+                                                 Color="@(wan.IsUp == true ? Color.Success : wan.IsUp == false ? Color.Error : Color.Default)">
+                                            @FormatWanLabel(wan, groupList): @FormatWanStatus(wan.IsUp) @FormatWanIp(wan.IpAddress)
+                                        </MudChip>
+                                    }
+                                </MudStack>
+                            }
+                        }
+                    </MudPaper>
+                }
+
+                <MudGrid Class="mt-2">
+                    <MudItem xs="12" sm="6" md="3">
+                        <MudPaper Class="pa-3" Elevation="1">
+                            <MudText Typo="Typo.caption">Clients</MudText>
+                            <MudText Typo="Typo.h4">@summary.TotalClients</MudText>
+                        </MudPaper>
+                    </MudItem>
+
+                    <MudItem xs="12" sm="6" md="3">
+                        <MudPaper Class="pa-3" Elevation="1">
+                            <MudText Typo="Typo.caption">Devices</MudText>
+                            <MudText Typo="Typo.h4">@summary.TotalDevices</MudText>
+                        </MudPaper>
+                    </MudItem>
+
+                    <MudItem xs="12" sm="6" md="3">
+                        <MudPaper Class="pa-3" Elevation="1">
+                            <MudText Typo="Typo.caption">Wired</MudText>
+                            <MudText Typo="Typo.h4">@summary.TotalWired</MudText>
+                        </MudPaper>
+                    </MudItem>
+
+                    <MudItem xs="12" sm="6" md="3">
+                        <MudPaper Class="pa-3" Elevation="1">
+                            <MudText Typo="Typo.caption">Wireless</MudText>
+                            <MudText Typo="Typo.h4">@summary.TotalWifi</MudText>
+                        </MudPaper>
+                    </MudItem>
+
+                    <MudItem xs="12" sm="6" md="3">
+                        <MudPaper Class="pa-3" Elevation="1" Style="cursor:pointer;"
+                                  @onclick="@(() => Nav.NavigateTo("/clients/offline"))">
+                            <MudText Typo="Typo.caption">Offline</MudText>
+
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                <MudText Typo="Typo.h4">@summary.OfflineClients</MudText>
+
+                                @if (summary.OfflineClients > 0)
+                                {
+                                    <MudChip T="string" Color="Color.Error" Variant="Variant.Filled" Size="Size.Small">
+                                        Offline
+                                    </MudChip>
+                                }
+                            </MudStack>
+
+                            <MudText Typo="Typo.caption">Click for list</MudText>
+                        </MudPaper>
+                    </MudItem>
+
+                    <MudItem xs="12" sm="6" md="3">
+                        <MudPaper Class="pa-3" Elevation="1" Style="cursor:pointer;"
+                                  @onclick="@(() => Nav.NavigateTo("/alerts/offline"))">
+                            <MudText Typo="Typo.caption">Offline alerts</MudText>
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                <MudText Typo="Typo.h4">@summary.UnackedOfflineAlerts</MudText>
+                                @if (summary.UnackedOfflineAlerts > 0)
+                                {
+                                    <MudChip T="string" Color="Color.Error" Variant="Variant.Filled" Size="Size.Small">
+                                        Attention
+                                    </MudChip>
+                                }
+                            </MudStack>
+                            <MudText Typo="Typo.caption">Click for full list</MudText>
+                        </MudPaper>
+                    </MudItem>
+
+                    <MudItem xs="12" sm="6" md="3">
+                        <MudPaper Class="pa-3" Elevation="1" Style="cursor:pointer;"
+                                  @onclick="@(() => Nav.NavigateTo("/alerts/discovery"))">
+                            <MudText Typo="Typo.caption">New client/device alerts</MudText>
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                <MudText Typo="Typo.h4">@summary.UnackedDiscoveryAlerts</MudText>
+                                @if (summary.UnackedDiscoveryAlerts > 0)
+                                {
+                                    <MudChip T="string" Color="Color.Info" Variant="Variant.Filled" Size="Size.Small">
+                                        New
+                                    </MudChip>
+                                }
+                            </MudStack>
+                            <MudText Typo="Typo.caption">Click for list</MudText>
+                        </MudPaper>
+                    </MudItem>
+
+                    <MudItem xs="12" sm="6" md="3">
+                        <MudPaper Class="pa-3" Elevation="1">
+                            <MudText Typo="Typo.caption">Firmware updates</MudText>
+                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                <MudText Typo="Typo.h4">@summary.UnackedFirmwareAlerts</MudText>
+                                @if (summary.UnackedFirmwareAlerts > 0)
+                                {
+                                    <MudChip T="string" Color="Color.Warning" Variant="Variant.Filled" Size="Size.Small">
+                                        Update
+                                    </MudChip>
+                                }
+                            </MudStack>
+                            <MudText Typo="Typo.caption">UniFi devices</MudText>
+                        </MudPaper>
+                    </MudItem>
+                </MudGrid>
+            </MudItem>
+
+            <MudItem xs="12" md="6">
+                <MudPaper Class="pa-3" Elevation="1">
+                    <MudStack Row="true" AlignItems="AlignItems.Center">
+                        <MudText Typo="Typo.h6">Subnet Utilization</MudText>
+                        <MudSpacer />
+                    <MudStack Row="true" Spacing="1">
+                        <MudSelect T="int" Dense="true" Variant="Variant.Outlined" Style="min-width:90px; font-size:0.8rem;"
+                                   Value="subnetChartTopN"
+                                   ValueChanged="OnSubnetTopNChanged">
+                            @foreach (var n in subnetChartTopNOptions)
+                            {
+                                <MudSelectItem T="int" Value="@n">@($"Show {n}")</MudSelectItem>
+                            }
+                            @*@<MudSelectItem T="int" Value="0">All</MudSelectItem>*@
+                        </MudSelect>
+                    </MudStack>
+                    </MudStack>
+
+                    @if (subnetChartLabels.Length == 0)
+                    {
+                        <MudText Typo="Typo.body2" Class="mt-2">No subnet data to chart yet.</MudText>
+                    }
+                    else
+                    {
+                        <MudChart ChartType="ChartType.Bar"
+                                  XAxisLabels="@subnetChartLabels"
+                                  ChartSeries="@subnetChartSeries"
+                                  ChartOptions="@subnetChartOptions"
+                                  AxisChartOptions="@subnetChartAxisOptions"
+                                  Height="220px"
+                                  Class="mt-2 subnet-utilization-chart"
+                                  Style="width:100%;" />
+                    }
+                </MudPaper>
+            </MudItem>
+        </MudGrid>
+
+
+
+        <MudPaper Class="pa-3" Elevation="1">
+            <MudStack Row="true" AlignItems="AlignItems.Center">
+                    
+                <MudText Typo="Typo.h6">Offline alerts</MudText>
+                
+                <MudSpacer />
+                <MudButton Variant="Variant.Text" OnClick="@(() => Nav.NavigateTo("/alerts/offline"))">
+                    More…
+                </MudButton>
+            </MudStack>
+
+            @if (alerts.Count == 0)
+            {
+                <MudText Typo="Typo.body2" Class="mt-2">No unacknowledged offline alerts.</MudText>
+            }
+            else
+            {
+                <MudTable T="ClientOfflineAlert"
+                          Items="alerts"
+                          Dense="true"
+                          Hover="true"
+                          Bordered="true"
+                          Striped="true"
+                          Class="mt-2">
+
+                    <HeaderContent>
+                        <MudTh style="width:28px;"></MudTh>
+                        <MudTh>Client</MudTh>
+                        <MudTh style="width:160px;">IP</MudTh>
+                        <MudTh>Conn</MudTh>
+                        <MudTh>Upstream</MudTh>
+                        <MudTh>Host</MudTh>
+                        <MudTh>Location</MudTh>
+                        <MudTh>Rack</MudTh>
+                        <MudTh style="width:220px;">Went offline</MudTh>
+                        <MudTh style="width:220px;">Recovered</MudTh>
+                        <MudTh style="width:120px;"></MudTh>
+                    </HeaderContent>
+
+                    <RowTemplate Context="a">
+                        <MudTd DataLabel="Status">
+                            @if (a.CameOnlineAtUtc is null)
+                            {
+                                <MudTooltip Text="Offline (not yet recovered)">
+                                    <MudIcon Icon="@Icons.Material.Filled.Circle" Color="Color.Error" Size="Size.Small" />
+                                </MudTooltip>
+                            }
+                            else
+                            {
+                                <MudTooltip Text="Recovered (back online) — still unacknowledged">
+                                    <MudIcon Icon="@Icons.Material.Filled.Circle" Color="Color.Success" Size="Size.Small" />
+                                </MudTooltip>
+                            }
+                        </MudTd>
+
+                        <MudTd DataLabel="Client">
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.body2">@Safe(a.Device?.Name ?? a.NameAtTime)</MudText>
+                                <MudText Typo="Typo.caption">@Safe(a.Device?.Hostname)</MudText>
+                            </MudStack>
+                        </MudTd>
+
+                        <MudTd DataLabel="IP">
+                            @Safe(a.IpAtTime ?? a.Device?.IpAddress)
+                        </MudTd>
+
+                        <MudTd DataLabel="Conn" Align="Align.Center" Style="text-align:center;">
+                            @if (a.Device is not null && !string.IsNullOrWhiteSpace(a.Device.ConnectionType))
+                            {
+                                <MudTooltip Text="@GetConnTooltip(a.Device)">
+                                    <MudIcon Icon="@(IsWifi(a.Device.ConnectionType) ? Icons.Material.Filled.Wifi : Icons.Material.Filled.SettingsEthernet)"
+                                             Color="@(IsWifi(a.Device.ConnectionType) ? GetWifiColor(GetConnDetail(a.Device)) : Color.Default)"
+                                             Size="Size.Small" />
+                                </MudTooltip>
+                            }
+                        </MudTd>
+
+                        <MudTd DataLabel="Upstream">
+                            @Safe(FormatUpstream(a.Device))
+                        </MudTd>
+
+                        <MudTd DataLabel="Host">
+                            @Safe(a.Device?.HostDevice?.Name)
+                        </MudTd>
+
+                        <MudTd DataLabel="Location">
+                            @Safe(a.Device?.LocationRef?.Name ?? a.Device?.Location)
+                        </MudTd>
+
+                        <MudTd DataLabel="Rack">
+                            @Safe(FormatRack(a.Device))
+                        </MudTd>
+
+                        <MudTd DataLabel="Went offline">
+                            @FormatAbsRel(a.WentOfflineAtUtc)
+                        </MudTd>
+
+                        <MudTd DataLabel="Recovered">
+                            @if (a.CameOnlineAtUtc is null)
+                            {
+                                <span>—</span>
+                            }
+                            else
+                            {
+                                @FormatAbsRel(a.CameOnlineAtUtc.Value)
+                            }
+                        </MudTd>
+
+                        <MudTd DataLabel="Actions">
+                            <MudButton Variant="Variant.Filled"
+                                       Color="Color.Primary"
+                                       Size="Size.Small"
+                                       Disabled="@ackBusy"
+                                       OnClick="@(() => Acknowledge(a.Id))">
+                                Acknowledge
+                            </MudButton>
+                        </MudTd>
+                    </RowTemplate>
+
+                    <NoRecordsContent>
+                        <MudText Typo="Typo.body2" Class="pa-4">No alerts.</MudText>
+                    </NoRecordsContent>
+                </MudTable>
+            }
+        </MudPaper>
+
+        <MudPaper Class="pa-3" Elevation="1">
+            <MudText Typo="Typo.h6">Firmware updates</MudText>
+
+            @if (firmwareAlerts.Count == 0)
+            {
+                <MudText Typo="Typo.body2" Class="mt-2">No unacknowledged firmware updates.</MudText>
+            }
+            else
+            {
+                <MudTable T="DeviceFirmwareUpdateAlert"
+                          Items="firmwareAlerts"
+                          Dense="true"
+                          Hover="true"
+                          Bordered="true"
+                          Striped="true"
+                          Class="mt-2">
+
+                    <HeaderContent>
+                        <MudTh>Device</MudTh>
+                        <MudTh style="width:150px;">MAC</MudTh>
+                        <MudTh>Model</MudTh>
+                        <MudTh style="width:140px;">Current</MudTh>
+                        <MudTh style="width:140px;">Target</MudTh>
+                        <MudTh style="width:220px;">Detected</MudTh>
+                        <MudTh style="width:120px;"></MudTh>
+                    </HeaderContent>
+
+                    <RowTemplate Context="a">
+                        <MudTd DataLabel="Device">
+                            @Safe(a.Device?.Name ?? a.NameAtTime)
+                        </MudTd>
+
+                        <MudTd DataLabel="MAC">
+                            @Safe(a.Device?.MacAddress ?? a.MacAtTime)
+                        </MudTd>
+
+                        <MudTd DataLabel="Model">
+                            @Safe(a.Device?.Model ?? a.ModelAtTime)
+                        </MudTd>
+
+                        <MudTd DataLabel="Current">
+                            @Safe(a.CurrentVersion) 
+                        </MudTd>
+
+                        <MudTd DataLabel="Target">
+                            @Safe(a.TargetVersion)
+                        </MudTd>
+
+                        <MudTd DataLabel="Detected">
+                            @FormatAbsRel(a.DetectedAtUtc)
+                        </MudTd>
+
+                        <MudTd DataLabel="Actions">
+                            <MudButton Variant="Variant.Filled"
+                                       Color="Color.Primary"
+                                       Size="Size.Small"
+                                       Disabled="@ackFirmwareBusy"
+                                       OnClick="@(() => AcknowledgeFirmware(a.Id))">
+                                Acknowledge
+                            </MudButton>
+                        </MudTd>
+                    </RowTemplate>
+
+                    <NoRecordsContent>
+                        <MudText Typo="Typo.body2" Class="pa-4">No alerts.</MudText>
+                    </NoRecordsContent>
+                </MudTable>
+            }
+        </MudPaper>
+
+        <MudPaper Class="pa-3" Elevation="1">
+            <MudText Typo="Typo.h6">Critical Devices</MudText>
+
+            @if (criticalDevices.Count == 0)
+            {
+                <MudText Typo="Typo.body2" Class="mt-2">No critical devices defined.</MudText>
+            }
+            else
+            {
+                <MudTable T="Device"
+                          Items="criticalDevices"
+                          Dense="true"
+                          Hover="true"
+                          Bordered="true"
+                          Striped="true"
+                          Class="mt-2">
+                    <HeaderContent>
+                        <MudTh style="width:32px;"></MudTh>
+                        <MudTh style="width:28px;"></MudTh>
+                        <MudTh>Name</MudTh>
+                        <MudTh>Type</MudTh>
+                        <MudTh>Hostname</MudTh>
+                        <MudTh>IP</MudTh>
+                        <MudTh>Subnet</MudTh>
+                        <MudTh>MAC</MudTh>
+                        <MudTh style="width:54px;">Conn</MudTh>
+                        <MudTh>Upstream</MudTh>
+                        <MudTh>Location</MudTh>
+                        <MudTh>Rack</MudTh>
+                    </HeaderContent>
+
+                    <RowTemplate Context="d">
+                        <MudTd DataLabel="">
+                            <MudIconButton Icon="@(IsCriticalExpanded(d.Id) ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                           Size="Size.Small"
+                                           Color="Color.Default"
+                                           OnClick="@(() => ToggleCritical(d.Id))" />
+                        </MudTd>
+
+                        <MudTd DataLabel="Status">
+                            <MudTooltip Text="@(d.IsStatusTracked ? (d.IsOnline ? "Online" : "Offline") : "Not Tracked")">
+                                <MudIcon Icon="@Icons.Material.Filled.Circle"
+                                         Color="@(d.IsStatusTracked ? (d.IsOnline ? Color.Success : Color.Error) : Color.Default)"
+                                         Size="Size.Small" />
+                            </MudTooltip>
+                        </MudTd>
+
+                        <MudTd DataLabel="Name">
+                            @if (TryBuildAccessLink(d.AccessLink, out var accessHref))
+                            {
+                                <MudLink Href="@accessHref"
+                                         Target="_blank"
+                                         Rel="noopener noreferrer"
+                                         Underline="Underline.Always"
+                                         Style="font-size:inherit; font-weight:600">
+                                    @d.Name
+                                </MudLink>
+                            }
+                            else
+                            {
+                                @d.Name
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="Type">@d.ClientType?.Name</MudTd>
+                        <MudTd DataLabel="Hostname">@Safe(d.Hostname)</MudTd>
+                        <MudTd DataLabel="IP">@Safe(d.IpAddress)</MudTd>
+                        <MudTd DataLabel="Subnet">
+                            @if (d.Subnet is not null)
+                            {
+                                <MudLink Href="@($"/subnets/{d.Subnet.Id}/ips")"
+                                         Underline="Underline.Always"
+                                         Style="font-size:inherit; font-weight:600">
+                                    @d.Subnet.Name
+                                </MudLink>
+                            }
+                            else
+                            {
+                                <span>-</span>
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="MAC">@Safe(d.MacAddress)</MudTd>
+                        <MudTd DataLabel="Conn" Align="Align.Center" Style="text-align:center;">
+                            @if (!string.IsNullOrWhiteSpace(d.ConnectionType))
+                            {
+                                <MudTooltip Text="@GetConnTooltip(d)">
+                                    <MudIcon Icon="@(IsWifi(d.ConnectionType) ? Icons.Material.Filled.Wifi : Icons.Material.Filled.SettingsEthernet)"
+                                             Color="@(IsWifi(d.ConnectionType) ? GetWifiColor(GetConnDetail(d)) : Color.Default)"
+                                             Size="Size.Small" />
+                                </MudTooltip>
+                            }
+                        </MudTd>
+                        <MudTd DataLabel="Upstream">@Safe(FormatUpstream(d))</MudTd>
+                        <MudTd DataLabel="Location">@Safe(d.LocationRef?.Name ?? d.Location)</MudTd>
+                        <MudTd DataLabel="Rack">@Safe(FormatRack(d))</MudTd>
+                    </RowTemplate>
+
+                    <ChildRowContent Context="d">
+                        @if (IsCriticalExpanded(d.Id))
+                        {
+                            <MudTd ColSpan="12" Class="pa-2">
+                                @RenderCriticalTimeline(d.Id)
+                            </MudTd>
+                        }
+                    </ChildRowContent>
+
+                    <NoRecordsContent>
+                        <MudText Typo="Typo.body2" Class="pa-4">No critical devices.</MudText>
+                    </NoRecordsContent>
+                </MudTable>
+            }
+        </MudPaper>
+
+        <MudPaper Class="pa-3" Elevation="1">
+            <MudStack Row="true" AlignItems="AlignItems.Center">
+                <MudText Typo="Typo.h6">New clients/devices</MudText>
+                <MudSpacer />
+                <MudButton Variant="Variant.Text" OnClick="@(() => Nav.NavigateTo("/alerts/discovery"))">
+                    More...
+                </MudButton>
+            </MudStack>
+
+            @if (discoveryAlerts.Count == 0)
+            {
+                <MudText Typo="Typo.body2" Class="mt-2">No unacknowledged discovery alerts.</MudText>
+            }
+            else
+            {
+                <MudTable T="ClientDiscoveryAlert"
+                          Items="discoveryAlerts"
+                          Dense="true"
+                          Hover="true"
+                          Bordered="true"
+                          Striped="true"
+                          Class="mt-2">
+
+                    <HeaderContent>
+                        <MudTh>Client</MudTh>
+                        <MudTh>IP</MudTh>
+                        <MudTh>Conn</MudTh>
+                        <MudTh>Upstream</MudTh>
+                        <MudTh style="width:200px;">Detected</MudTh>
+                        <MudTh style="width:200px;"></MudTh>
+                    </HeaderContent>
+
+                    <RowTemplate Context="a">
+                        <MudTd DataLabel="Client">
+                            <MudStack Spacing="0">
+                                <MudText Typo="Typo.body2">@Safe(a.Name)</MudText>
+                                <MudText Typo="Typo.caption">@Safe(a.Hostname)</MudText>
+                                <MudText Typo="Typo.caption">@Safe(a.Mac)</MudText>
+                            </MudStack>
+                        </MudTd>
+
+                        <MudTd DataLabel="IP">@Safe(a.IpAddress)</MudTd>
+                        <MudTd DataLabel="Conn">@Safe(a.ConnectionType)</MudTd>
+                        <MudTd DataLabel="Upstream">@Safe(a.UpstreamDeviceName)</MudTd>
+                        <MudTd DataLabel="Detected">@FormatAbsRel(a.DetectedAtUtc)</MudTd>
+
+                        <MudTd DataLabel="Actions">
+                            <MudStack Row="true" Spacing="1">
+                                <MudButton Variant="Variant.Filled"
+                                           Color="Color.Primary"
+                                           Size="Size.Small"
+                                           Disabled="@ackDiscoveryBusy"
+                                           OnClick="@(() => AddDiscovery(a.Id, editBeforeAdd: false))">
+                                    Add
+                                </MudButton>
+                                <MudButton Variant="Variant.Outlined"
+                                           Color="Color.Primary"
+                                           Size="Size.Small"
+                                           Disabled="@ackDiscoveryBusy"
+                                           OnClick="@(() => AddDiscovery(a.Id, editBeforeAdd: true))">
+                                    Edit & Add
+                                </MudButton>
+                                <MudButton Variant="Variant.Outlined"
+                                           Color="Color.Error"
+                                           Size="Size.Small"
+                                           Disabled="@ackDiscoveryBusy"
+                                           OnClick="@(() => IgnoreDiscovery(a.Id))">
+                                    Ignore
+                                </MudButton>
+                            </MudStack>
+                        </MudTd>
+                    </RowTemplate>
+
+                    <NoRecordsContent>
+                        <MudText Typo="Typo.body2" Class="pa-4">No alerts.</MudText>
+                    </NoRecordsContent>
+                </MudTable>
+            }
+        </MudPaper>
+
+        <MudPaper Class="pa-3" Elevation="1">
+            <MudText Typo="Typo.h6">Subnets Overview</MudText>
+
+            <MudTable T="SubnetRow"
+                      Items="subnetRows"
+                      Dense="true"
+                      Hover="true"
+                      Bordered="true"
+                      Striped="true"
+                      Class="mt-2">
+
+                <HeaderContent>
+                    <MudTh>Subnet</MudTh>
+                    <MudTh>CIDR</MudTh>
+                    <MudTh style="width:110px; text-align:center;">Usable</MudTh>
+                    <MudTh style="width:110px; text-align:center;">Used IPs</MudTh>
+                    <MudTh style="width:110px; text-align:center;">Available</MudTh>
+                    <MudTh style="width:120px; text-align:center;">Clients</MudTh>
+                    <MudTh style="width:120px; text-align:center;">Devices</MudTh>
+                    <MudTh style="width:140px; text-align:center;">Offline</MudTh>
+                </HeaderContent>
+
+                <RowTemplate Context="r">
+                    <MudTd DataLabel="Subnet">
+                        <MudLink Href="@($"/subnets/{r.Id}/ips")"
+                                 Underline="Underline.Always"
+                                 Style="font-size:inherit; font-weight:600;">
+                            @r.Name
+                        </MudLink>
+                    </MudTd>
+
+                    <MudTd DataLabel="CIDR">
+                        <MudLink Href="@($"/subnets/{r.Id}/ips")"
+                                 Underline="Underline.Always"
+                                 Style="font-size:inherit; font-weight:600;">
+                            @r.Cidr
+                        </MudLink>
+                    </MudTd>
+
+                    <MudTd DataLabel="Usable" Align="Align.Center" Style="text-align:center;">@r.UsableCount</MudTd>
+                    <MudTd DataLabel="Used IPs" Align="Align.Center" Style="text-align:center;">@r.UsedIpCount</MudTd>
+                    <MudTd DataLabel="Available" Align="Align.Center" Style="text-align:center;">@r.FreeIpCount</MudTd>
+
+                    <MudTd DataLabel="Clients" Align="Align.Center" Style="text-align:center;">@r.ClientCount</MudTd>
+                    <MudTd DataLabel="Devices" Align="Align.Center" Style="text-align:center;">@r.DeviceCount</MudTd>
+                    <MudTd DataLabel="Offline" Align="Align.Center" Style="text-align:center;">
+                        @if (r.OfflineCount > 0)
+                        {
+                            <MudChip T="string"
+                                     Color="Color.Error"
+                                     Variant="Variant.Filled"
+                                     Size="Size.Small"
+                                     Style="cursor:pointer;"
+                                     OnClick="@(() => Nav.NavigateTo($"/subnets/{r.Id}/clients/offline"))">
+                                @r.OfflineCount
+                            </MudChip>
+                        }
+                        else
+                        {
+                            <span>0</span>
+                        }
+                    </MudTd>
+
+                    
+                </RowTemplate>
+
+                <NoRecordsContent>
+                    <MudText Typo="Typo.body2" Class="pa-4">No subnets found.</MudText>
+                </NoRecordsContent>
+            </MudTable>
+        </MudPaper>
+
+    }
+</MudStack>
+
+<style>
+    .download-icon-btn {
+        height: 26px;
+        width: 26px;
+        padding: 0;
+    }
+
+    .refresh-icon {
+        margin-right: 20px;
+    }
+</style>
+
+<style>
+    .critical-timeline {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .critical-bar {
+        display: flex;
+        height: 12px;
+        border-radius: 6px;
+        overflow: hidden;
+        border: 1px solid rgba(0,0,0,0.12);
+    }
+
+    .critical-seg {
+        height: 100%;
+    }
+
+    .critical-online {
+        background-color: #43a047;
+    }
+
+    .critical-offline {
+        background-color: #e53935;
+    }
+
+    .critical-unknown {
+        background-color: #9e9e9e;
+    }
+
+    .critical-hours {
+        display: grid;
+        grid-template-columns: repeat(24, 1fr);
+        font-size: 0.65rem;
+        color: var(--mud-palette-text-secondary);
+        margin-top: 2px;
+    }
+
+    .critical-hours span {
+        text-align: left;
+        position: relative;
+    }
+
+    .critical-hours span::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: -4px;
+        height: 4px;
+        border-left: 1px solid rgba(0,0,0,0.2);
+    }
+
+    .subnet-utilization-chart {
+        width: 100% !important;
+        max-width: none !important;
+        display: block;
+    }
+
+    .subnet-utilization-chart svg {
+        width: 100% !important;
+        max-width: none !important;
+        display: block;
+    }
+</style>
+
+<style>
+    .subnet-utilization-chart svg {
+        width: 100% !important;
+    }
+</style>
+
+@code {
+    private bool isRefreshing;
+    private bool loading = true;
+    private bool ackBusy;
+    private bool ackDiscoveryBusy;
+    private bool ackFirmwareBusy;
+    private string? error;
+
+    private Summary summary = new();
+    private List<SubnetRow> subnetRows = new();
+    private List<ChartSeries> subnetChartSeries = new();
+    private string[] subnetChartLabels = Array.Empty<string>();
+    private ChartOptions subnetChartOptions = new()
+    {
+        ChartPalette = new[] { "#fdd835", "#1e88e5", "#43a047" }
+    };
+    private AxisChartOptions subnetChartAxisOptions = new()
+    {
+        StackedBarWidthRatio = 0.99,
+        MatchBoundsToSize = true
+    };
+    private readonly int[] subnetChartTopNOptions = new[] { 3, 5, 10 };
+    private int subnetChartTopN = 10;
+    private string dateFormat = "MM-dd-yyyy HH:mm";
+    private bool showWanStatus;
+    private List<WanInterfaceStatus> wanStatuses = new();
+
+    private List<ClientOfflineAlert> alerts = new();
+    private List<ClientDiscoveryAlert> discoveryAlerts = new();
+    private List<DeviceFirmwareUpdateAlert> firmwareAlerts = new();
+    private readonly List<Device> criticalDevices = new();
+    private readonly Dictionary<int, List<TimelineSegment>> criticalSegments = new();
+    private readonly HashSet<int> expandedCritical = new();
+    private string[] criticalHourLabels = Array.Empty<string>();
+    private DateTime criticalWindowStartLocal;
+    private DateTime criticalWindowEndLocal;
+    private double criticalWindowMinutes;
+
+    private CancellationTokenSource? _refreshCts;
+    private Task? _refreshLoop;
+
+    private static readonly Regex FirstIPv4Regex =
+        new(@"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b",
+            RegexOptions.Compiled);
+
+    protected override async Task OnInitializedAsync()
+    {
+        SettingsService.SettingsChanged += OnSettingsChanged;
+        UnifiUpdater.StatusChanged += OnUpdaterStatusChanged;
+
+        var s = await SettingsService.LoadAsync();
+        dateFormat = string.IsNullOrWhiteSpace(s.DateFormat) ? dateFormat : s.DateFormat;
+        showWanStatus = s.UiShowWanStatus;
+        StartOrRestartAutoRefresh(s.UiAutoRefreshSeconds);
+
+        await Reload();
+    }
+
+    private void OnSettingsChanged(AppSetting s)
+    {
+        dateFormat = string.IsNullOrWhiteSpace(s.DateFormat) ? dateFormat : s.DateFormat;
+        showWanStatus = s.UiShowWanStatus;
+        StartOrRestartAutoRefresh(s.UiAutoRefreshSeconds);
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void OnUpdaterStatusChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        SettingsService.SettingsChanged -= OnSettingsChanged;
+        UnifiUpdater.StatusChanged -= OnUpdaterStatusChanged;
+        StopAutoRefresh();
+    }
+
+    private void StartOrRestartAutoRefresh(int seconds)
+    {
+        StopAutoRefresh();
+
+        if (seconds <= 0)
+            return;
+
+        var interval = TimeSpan.FromSeconds(Math.Clamp(seconds, 5, 3600));
+        _refreshCts = new CancellationTokenSource();
+        var ct = _refreshCts.Token;
+
+        _refreshLoop = Task.Run(async () =>
+        {
+            try
+            {
+                var timer = new PeriodicTimer(interval);
+                while (await timer.WaitForNextTickAsync(ct))
+                {
+                    await Reload();
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+            catch (OperationCanceledException) { }
+        }, ct);
+    }
+
+    private void StopAutoRefresh()
+    {
+        try { _refreshCts?.Cancel(); } catch { }
+        _refreshCts?.Dispose();
+        _refreshCts = null;
+        _refreshLoop = null;
+    }
+
+    private async Task Acknowledge(int alertId)
+    {
+        if (ackBusy) return;
+        ackBusy = true;
+
+        try
+        {
+            var entity = await DbContext.ClientOfflineAlerts
+                .FirstOrDefaultAsync(a => a.Id == alertId);
+
+            if (entity is null)
+                return;
+
+            entity.IsAcknowledged = true;
+            entity.AcknowledgedAtUtc = DateTime.UtcNow;
+
+            await DbContext.SaveChangesAsync();
+
+            await Reload();
+        }
+        finally
+        {
+            ackBusy = false;
+        }
+    }
+
+    private async Task AcknowledgeFirmware(int alertId)
+    {
+        if (ackFirmwareBusy) return;
+        ackFirmwareBusy = true;
+
+        try
+        {
+            var entity = await DbContext.DeviceFirmwareUpdateAlerts
+                .FirstOrDefaultAsync(a => a.Id == alertId);
+
+            if (entity is null)
+                return;
+
+            entity.IsAcknowledged = true;
+            entity.AcknowledgedAtUtc = DateTime.UtcNow;
+
+            await DbContext.SaveChangesAsync();
+            await Reload();
+        }
+        finally
+        {
+            ackFirmwareBusy = false;
+        }
+    }
+
+    private async Task AddDiscovery(int alertId, bool editBeforeAdd)
+    {
+        if (ackDiscoveryBusy) return;
+        ackDiscoveryBusy = true;
+
+        try
+        {
+            var alert = await DbContext.ClientDiscoveryAlerts
+                .AsNoTracking()
+                .FirstOrDefaultAsync(a => a.Id == alertId);
+
+            if (alert is null)
+                return;
+
+            Device? device = null;
+            if (editBeforeAdd)
+            {
+                var parameters = new DialogParameters
+                {
+                    { "Alert", alert }
+                };
+
+                var dialog = DialogService.Show<NewDiscoveryDeviceDialog>(
+                    "Add discovered device",
+                    parameters,
+                    new DialogOptions { MaxWidth = MaxWidth.Medium, FullWidth = true });
+
+                var result = await dialog.Result;
+                if (result.Canceled || result.Data is not Device edited)
+                    return;
+
+                device = edited;
+                device.MacAddress = string.IsNullOrWhiteSpace(device.MacAddress)
+                    ? UnifiParsers.NormalizeMac(alert.Mac)
+                    : UnifiParsers.NormalizeMac(device.MacAddress);
+                device.UpstreamDeviceMac = string.IsNullOrWhiteSpace(device.UpstreamDeviceMac)
+                    ? null
+                    : UnifiParsers.NormalizeMac(device.UpstreamDeviceMac);
+            }
+            else
+            {
+                device = new Device
+                {
+                    Name = alert.Name ?? alert.Mac,
+                    Hostname = alert.Hostname,
+                    MacAddress = UnifiParsers.NormalizeMac(alert.Mac),
+                    IpAddress = alert.IpAddress,
+                    ConnectionType = alert.ConnectionType,
+                    ConnectionDetail = alert.ConnectionDetail,
+                    UpstreamDeviceName = alert.UpstreamDeviceName,
+                    UpstreamDeviceMac = string.IsNullOrWhiteSpace(alert.UpstreamDeviceMac) ? null : UnifiParsers.NormalizeMac(alert.UpstreamDeviceMac),
+                    UpstreamConnection = alert.UpstreamConnection,
+                    IsOnline = alert.IsOnline
+                };
+            }
+
+            device.MacAddress = string.IsNullOrWhiteSpace(device.MacAddress)
+                ? UnifiParsers.NormalizeMac(alert.Mac)
+                : UnifiParsers.NormalizeMac(device.MacAddress);
+
+            var exists = await DbContext.Devices
+                .AnyAsync(d => d.MacAddress == device.MacAddress);
+            if (!exists)
+            {
+                DbContext.Devices.Add(device);
+            }
+
+            var entity = await DbContext.ClientDiscoveryAlerts
+                .FirstOrDefaultAsync(a => a.Id == alertId);
+
+            if (entity is not null)
+            {
+                entity.IsAcknowledged = true;
+                entity.AcknowledgedAtUtc = DateTime.UtcNow;
+            }
+
+            await DbContext.SaveChangesAsync();
+            await Reload();
+        }
+        finally
+        {
+            ackDiscoveryBusy = false;
+        }
+    }
+
+    private async Task IgnoreDiscovery(int alertId)
+    {
+        if (ackDiscoveryBusy) return;
+        ackDiscoveryBusy = true;
+
+        try
+        {
+            var alert = await DbContext.ClientDiscoveryAlerts
+                .FirstOrDefaultAsync(a => a.Id == alertId);
+
+            if (alert is null)
+                return;
+
+            var mac = UnifiParsers.NormalizeMac(alert.Mac);
+            if (!string.IsNullOrWhiteSpace(mac))
+            {
+                var exists = await DbContext.IgnoredDiscoveryMacs
+                    .AnyAsync(i => i.Mac == mac);
+
+                if (!exists)
+                {
+                    DbContext.IgnoredDiscoveryMacs.Add(new IgnoredDiscoveryMac
+                    {
+                        Mac = mac,
+                        IgnoredAtUtc = DateTime.UtcNow,
+                        Source = "Dashboard"
+                    });
+                }
+            }
+
+            alert.IsAcknowledged = true;
+            alert.AcknowledgedAtUtc = DateTime.UtcNow;
+
+            await DbContext.SaveChangesAsync();
+            await Reload();
+        }
+        finally
+        {
+            ackDiscoveryBusy = false;
+        }
+    }
+
+    private Task ReloadClick() => Reload();
+
+    private async Task ReloadWithSpinner()
+    {
+        if (isRefreshing)
+            return;
+
+        isRefreshing = true;
+        await ReloadClick();
+        await Task.Delay(300);
+        isRefreshing = false;
+    }
+
+    private async Task Reload()
+    {
+        loading = true;
+        error = null;
+
+        try
+        {
+            // Exclude ignored devices from "unacked alerts" counts and the preview list
+            summary.UnackedOfflineAlerts = await DbContext.ClientOfflineAlerts
+                .AsNoTracking()
+                .Include(a => a.Device)
+                .CountAsync(a => !a.IsAcknowledged &&
+                                 a.Device != null &&
+                                 !a.Device.IgnoreOffline &&
+                                 a.Device.IsStatusTracked);
+
+            var ignoredMacs = await DbContext.IgnoredDiscoveryMacs
+                .AsNoTracking()
+                .Select(i => i.Mac)
+                .ToListAsync();
+            var ignoredSet = new HashSet<string>(ignoredMacs, StringComparer.OrdinalIgnoreCase);
+
+            summary.UnackedDiscoveryAlerts = await DbContext.ClientDiscoveryAlerts
+                .AsNoTracking()
+                .CountAsync(a => !a.IsAcknowledged && !ignoredSet.Contains(a.Mac));
+
+            summary.UnackedFirmwareAlerts = await DbContext.DeviceFirmwareUpdateAlerts
+                .AsNoTracking()
+                .CountAsync(a => !a.IsAcknowledged && a.ResolvedAtUtc == null);
+
+            alerts = await DbContext.ClientOfflineAlerts
+                .AsNoTracking()
+                .Include(a => a.Device)
+                .ThenInclude(d => d.LocationRef)
+                .Include(a => a.Device)
+                .ThenInclude(d => d.RackRef)
+                .Include(a => a.Device)
+                .ThenInclude(d => d.HostDevice)
+                .Where(a => !a.IsAcknowledged &&
+                            a.Device != null &&
+                            !a.Device.IgnoreOffline &&
+                            a.Device.IsStatusTracked)
+                .OrderByDescending(a => a.WentOfflineAtUtc)
+                .Take(10)
+                .ToListAsync();
+
+            discoveryAlerts = await DbContext.ClientDiscoveryAlerts
+                .AsNoTracking()
+                .Where(a => !a.IsAcknowledged)
+                .OrderByDescending(a => a.DetectedAtUtc)
+                .Take(10)
+                .ToListAsync();
+
+            discoveryAlerts = discoveryAlerts
+                .Where(a => !ignoredSet.Contains(a.Mac))
+                .ToList();
+
+            firmwareAlerts = await DbContext.DeviceFirmwareUpdateAlerts
+                .AsNoTracking()
+                .Include(a => a.Device)
+                .Where(a => !a.IsAcknowledged && a.ResolvedAtUtc == null)
+                .OrderByDescending(a => a.DetectedAtUtc)
+                .Take(10)
+                .ToListAsync();
+
+            if (showWanStatus)
+            {
+                wanStatuses = await DbContext.WanInterfaceStatuses
+                    .AsNoTracking()
+                    .OrderBy(w => w.GatewayName)
+                    .ThenBy(w => w.InterfaceName)
+                    .ToListAsync();
+            }
+            else
+            {
+                wanStatuses = new List<WanInterfaceStatus>();
+            }
+
+            criticalDevices.Clear();
+            var criticalList = await DbContext.Devices
+                .AsNoTracking()
+                .Include(d => d.ClientType)
+                .Include(d => d.Subnet)
+                .Include(d => d.HostDevice)
+                .Include(d => d.LocationRef)
+                .Include(d => d.RackRef)
+                .Where(d => d.IsCritical)
+                .ToListAsync();
+
+            criticalDevices.AddRange(criticalList
+                .OrderBy(d => GetIpSortKey(d))
+                .ThenBy(d => d.Name));
+
+            if (criticalDevices.Count > 0)
+            {
+                var criticalIds = criticalDevices.Select(d => d.Id).ToList();
+                var windowEndUtc = DateTime.UtcNow;
+                var windowStartUtc = windowEndUtc.AddHours(-24);
+
+                var recentEvents = await DbContext.DeviceStatusEvents
+                    .AsNoTracking()
+                    .Where(e => criticalIds.Contains(e.DeviceId) && e.ChangedAtUtc >= windowStartUtc && e.ChangedAtUtc <= windowEndUtc)
+                    .OrderBy(e => e.ChangedAtUtc)
+                    .ToListAsync();
+
+                var baselineEvents = await DbContext.DeviceStatusEvents
+                    .AsNoTracking()
+                    .Where(e => criticalIds.Contains(e.DeviceId) && e.ChangedAtUtc < windowStartUtc)
+                    .GroupBy(e => e.DeviceId)
+                    .Select(g => g.OrderByDescending(e => e.ChangedAtUtc).FirstOrDefault())
+                    .ToListAsync();
+
+                var baselineMap = baselineEvents
+                    .Where(e => e is not null)
+                    .ToDictionary(e => e!.DeviceId, e => (bool?)e!.IsOnline);
+
+                BuildCriticalTimelines(windowStartUtc, windowEndUtc, recentEvents, baselineMap);
+            }
+            else
+            {
+                criticalSegments.Clear();
+                expandedCritical.Clear();
+                criticalHourLabels = Array.Empty<string>();
+            }
+
+            var subnets = await DbContext.Subnets
+                .AsNoTracking()
+                .Select(s => new { s.Id, s.Name, s.Cidr, s.VlanId })
+                .OrderBy(s => s.VlanId ?? int.MaxValue)
+                .ThenBy(s => s.Cidr)
+                .ThenBy(s => s.Name)
+                .ToListAsync();
+
+            var all = await DbContext.Devices
+                .AsNoTracking()
+                .Include(d => d.ClientType)
+                .Select(d => new DeviceLite(
+                    d.Id,
+                    d.Name,
+                    d.SubnetId,
+                    d.IpAddress,
+                    d.ConnectionType,
+                    d.IsOnline,
+                    d.ClientType != null && d.ClientType.IsDevice,
+                    d.IgnoreOffline,
+                    d.IsStatusTracked,
+                    d.ClientType != null ? d.ClientType.Name : null))
+                .ToListAsync();
+
+            var clientsOnly = all.Where(d => !d.IsDevice).ToList();
+            var devicesOnly = all.Where(d => d.IsDevice).ToList();
+
+            summary.TotalClients = clientsOnly.Count;
+            summary.TotalDevices = devicesOnly.Count;
+
+            summary.TotalWired = all.Count(d => IsWired(d.ConnectionType));
+            summary.TotalWifi = all.Count(d => IsWifi(d.ConnectionType));
+
+            // Offline count EXCLUDES ignored devices
+            summary.OfflineClients = all.Count(d => d.IsStatusTracked && !d.IsOnline && !d.IgnoreOffline);
+
+            var usedIpBySubnet = new Dictionary<int, HashSet<uint>>();
+            foreach (var s in subnets)
+                usedIpBySubnet[s.Id] = new HashSet<uint>();
+
+            var subnetInfos = new Dictionary<int, (string Name, string Cidr, IpCidr.CidrInfo Info, int UsableCount)>();
+
+            foreach (var s in subnets)
+            {
+                if (string.IsNullOrWhiteSpace(s.Cidr))
+                    continue;
+
+                if (!IpCidr.TryParseIPv4Cidr(s.Cidr.Trim(), out var info, out _))
+                    continue;
+
+                var usable = (int)Math.Min(int.MaxValue, info.UsableAddresses);
+                subnetInfos[s.Id] = (s.Name ?? "", s.Cidr ?? "", info, usable);
+            }
+
+            foreach (var d in all)
+            {
+                if (d.SubnetId is null)
+                    continue;
+
+                if (!subnetInfos.TryGetValue(d.SubnetId.Value, out var si))
+                    continue;
+
+                var extracted = ExtractFirstIPv4(d.IpAddress);
+                if (extracted is null)
+                    continue;
+
+                if (!IpCidr.TryParseIPv4(extracted, out var ipUInt, out _))
+                    continue;
+
+                if (ipUInt < si.Info.NetworkUInt || ipUInt > si.Info.BroadcastUInt)
+                    continue;
+
+                usedIpBySubnet[d.SubnetId.Value].Add(ipUInt);
+            }
+
+            var clientsBySubnet = clientsOnly
+                .Where(d => d.SubnetId != null)
+                .GroupBy(d => d.SubnetId!.Value)
+                .ToDictionary(g => g.Key, g => g.Count());
+
+            var devicesBySubnet = devicesOnly
+                .Where(d => d.SubnetId != null)
+                .GroupBy(d => d.SubnetId!.Value)
+                .ToDictionary(g => g.Key, g => g.Count());
+
+            // Offline per subnet EXCLUDES ignored devices
+            var offlineBySubnet = all
+                .Where(d => d.SubnetId != null && d.IsStatusTracked && !d.IsOnline && !d.IgnoreOffline)
+                .GroupBy(d => d.SubnetId!.Value)
+                .ToDictionary(g => g.Key, g => g.Count());
+
+            subnetRows = subnets.Select(s =>
+            {
+                subnetInfos.TryGetValue(s.Id, out var si);
+                var usable = si.UsableCount;
+
+                var used = usedIpBySubnet.TryGetValue(s.Id, out var set) ? set.Count : 0;
+                var free = usable > 0 ? Math.Max(usable - used, 0) : 0;
+
+                clientsBySubnet.TryGetValue(s.Id, out var cCount);
+                offlineBySubnet.TryGetValue(s.Id, out var offCount);
+                devicesBySubnet.TryGetValue(s.Id, out var dCount);
+
+                return new SubnetRow
+                {
+                    Id = s.Id,
+                    Name = s.Name ?? "",
+                    Cidr = s.Cidr ?? "",
+                    VlanId = s.VlanId,
+                    UsableCount = usable,
+                    UsedIpCount = used,
+                    FreeIpCount = free,
+                    ClientCount = cCount,
+                    OfflineCount = offCount,
+                    DeviceCount = dCount
+                };
+            }).ToList();
+
+            BuildSubnetChart();
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
+        finally
+        {
+            loading = false;
+        }
+    }
+
+    private static bool IsWifi(string? connectionType)
+        => !string.IsNullOrWhiteSpace(connectionType)
+           && connectionType.Trim().Equals("WiFi", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsWired(string? connectionType)
+        => !string.IsNullOrWhiteSpace(connectionType)
+           && connectionType.Trim().Equals("Wired", StringComparison.OrdinalIgnoreCase);
+
+    private void OnSubnetTopNChanged(int value)
+    {
+        subnetChartTopN = value;
+        BuildSubnetChart();
+        StateHasChanged();
+    }
+
+    private static string TruncateLabel(string? value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return "-";
+
+        var trimmed = value.Trim();
+        return trimmed.Length <= maxLength
+            ? trimmed
+            : trimmed.Substring(0, maxLength - 1) + "…";
+    }
+
+    private void BuildSubnetChart()
+    {
+        if (subnetRows.Count == 0)
+        {
+            subnetChartLabels = Array.Empty<string>();
+            subnetChartSeries = new List<ChartSeries>();
+            return;
+        }
+
+        var sourceRows = subnetChartTopN <= 0
+            ? subnetRows
+            : subnetRows
+                .OrderBy(r => r.VlanId ?? int.MaxValue)
+                .ThenBy(r => r.Name)
+                .Take(subnetChartTopN)
+                .ToList();
+
+        subnetChartLabels = sourceRows.Select(r => TruncateLabel(r.Name, 12)).ToArray();
+
+        var usable = sourceRows.Select(r => (double)r.UsableCount).ToArray();
+        var used = sourceRows.Select(r => (double)r.UsedIpCount).ToArray();
+        var free = sourceRows.Select(r => Math.Max(0, (double)r.UsableCount - r.UsedIpCount)).ToArray();
+
+        subnetChartSeries = new List<ChartSeries>
+        {
+            new()
+            {
+                Name = "Usable",
+                Data = usable
+            },
+            new()
+            {
+                Name = "Used",
+                Data = used
+            },
+            new()
+            {
+                Name = "Available",
+                Data = free
+            }
+        };
+    }
+
+    private static string? GetConnDetail(Device d)
+        => d.HostDeviceId is not null ? "Hosted" : d.UpstreamConnection ?? d.ConnectionDetail;
+
+    private static string? ExtractFirstIPv4(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+
+        var m = FirstIPv4Regex.Match(text);
+        return m.Success ? m.Value : null;
+    }
+
+    private static uint GetIpSortKey(Device d)
+    {
+        var extracted = ExtractFirstIPv4(d.IpAddress);
+        if (extracted is not null && IpCidr.TryParseIPv4(extracted, out var ip, out _))
+            return ip;
+
+        return uint.MaxValue;
+    }
+
+    private static string FormatAbsRel(DateTime utc)
+    {
+        var local = DateTime.SpecifyKind(utc, DateTimeKind.Utc).ToLocalTime();
+        var abs = local.ToString("MM-dd-yyyy HH:mm");
+        var rel = ToRelative(DateTime.UtcNow - utc);
+        return $"{abs} ({rel})";
+    }
+
+    private static string ToRelative(TimeSpan age)
+    {
+        if (age < TimeSpan.Zero) age = TimeSpan.Zero;
+        if (age.TotalSeconds < 60) return "just now";
+        if (age.TotalMinutes < 60) return $"{(int)age.TotalMinutes}m ago";
+        if (age.TotalHours < 48) return $"{(int)age.TotalHours}h ago";
+        return $"{(int)age.TotalDays}d ago";
+    }
+
+    private static string FormatWanLabel(WanInterfaceStatus wan, List<WanInterfaceStatus> group)
+    {
+        var name = wan.InterfaceName;
+        if (name.Equals("wan1", StringComparison.OrdinalIgnoreCase))
+            return "Primary WAN";
+        if (name.Equals("wan2", StringComparison.OrdinalIgnoreCase))
+            return "Secondary WAN";
+        if (name.Equals("wan", StringComparison.OrdinalIgnoreCase))
+            return "WAN";
+        if (name.Equals("uplink", StringComparison.OrdinalIgnoreCase))
+        {
+            var activeLabel = ResolveActiveWanLabel(wan, group);
+            return string.IsNullOrWhiteSpace(activeLabel) ? "Active WAN" : $"Active WAN ({activeLabel})";
+        }
+        return name.ToUpperInvariant();
+    }
+
+    private static string FormatWanStatus(bool? isUp)
+        => isUp == true ? "Up" : isUp == false ? "Down" : "Unknown";
+
+    private static string FormatWanIp(string? ip)
+        => string.IsNullOrWhiteSpace(ip) ? "" : $" • {ip.Trim()}";
+
+    private static string? ResolveActiveWanLabel(WanInterfaceStatus uplink, List<WanInterfaceStatus> group)
+    {
+        if (string.IsNullOrWhiteSpace(uplink.IpAddress))
+            return null;
+
+        var ip = uplink.IpAddress.Trim();
+        var wan1 = group.FirstOrDefault(w => w.InterfaceName.Equals("wan1", StringComparison.OrdinalIgnoreCase));
+        if (wan1 is not null && string.Equals(wan1.IpAddress?.Trim(), ip, StringComparison.OrdinalIgnoreCase))
+            return "Primary";
+
+        var wan2 = group.FirstOrDefault(w => w.InterfaceName.Equals("wan2", StringComparison.OrdinalIgnoreCase));
+        if (wan2 is not null && string.Equals(wan2.IpAddress?.Trim(), ip, StringComparison.OrdinalIgnoreCase))
+            return "Secondary";
+
+        return null;
+    }
+
+    private void ToggleCritical(int deviceId)
+    {
+        if (!expandedCritical.Add(deviceId))
+            expandedCritical.Remove(deviceId);
+    }
+
+    private bool IsCriticalExpanded(int deviceId) => expandedCritical.Contains(deviceId);
+
+    private RenderFragment RenderCriticalTimeline(int deviceId) => @<div class="critical-timeline">
+        <div class="critical-bar">
+            @foreach (var seg in GetCriticalSegments(deviceId))
+            {
+                <div class="critical-seg @CriticalSegmentClass(seg.Kind)" style="width:@($"{seg.WidthPercent:0.###}%")"></div>
+            }
+        </div>
+        <div class="critical-hours">
+            @for (var i = 0; i < criticalHourLabels.Length; i++)
+            {
+                <span>@criticalHourLabels[i]</span>
+            }
+        </div>
+    </div>;
+
+    private IEnumerable<TimelineSegment> GetCriticalSegments(int deviceId)
+        => criticalSegments.TryGetValue(deviceId, out var segs) ? segs : Array.Empty<TimelineSegment>();
+
+    private static string CriticalSegmentClass(TimelineKind kind) => kind switch
+    {
+        TimelineKind.Online => "critical-online",
+        TimelineKind.Offline => "critical-offline",
+        _ => "critical-unknown"
+    };
+
+    private void BuildCriticalTimelines(
+        DateTime windowStartUtc,
+        DateTime windowEndUtc,
+        List<DeviceStatusEvent> recentEvents,
+        Dictionary<int, bool?> baseline)
+    {
+        criticalSegments.Clear();
+        var tz = TimeZoneInfo.Local;
+        criticalWindowStartLocal = TimeZoneInfo.ConvertTimeFromUtc(windowStartUtc, tz);
+        criticalWindowEndLocal = TimeZoneInfo.ConvertTimeFromUtc(windowEndUtc, tz);
+        criticalWindowMinutes = Math.Max(1, (criticalWindowEndLocal - criticalWindowStartLocal).TotalMinutes);
+
+        criticalHourLabels = Enumerable.Range(0, 24)
+            .Select(i => criticalWindowStartLocal.AddHours(i).ToString("HH"))
+            .ToArray();
+
+        var pointsByDevice = recentEvents
+            .Select(e => new EventPoint(e.DeviceId, TimeZoneInfo.ConvertTimeFromUtc(e.ChangedAtUtc, tz), e.IsOnline))
+            .GroupBy(e => e.DeviceId)
+            .ToDictionary(g => g.Key, g => g.OrderBy(p => p.Local).ToList());
+
+        foreach (var device in criticalDevices)
+        {
+            var points = pointsByDevice.TryGetValue(device.Id, out var list) ? list : new List<EventPoint>();
+            var current = baseline.TryGetValue(device.Id, out var b)
+                ? b
+                : device.IsStatusTracked ? device.IsOnline : (bool?)null;
+
+            var segments = new List<TimelineSegment>();
+            var cursor = criticalWindowStartLocal;
+
+            foreach (var p in points)
+            {
+                var t = p.Local;
+                if (t <= criticalWindowStartLocal)
+                {
+                    current = p.IsOnline;
+                    continue;
+                }
+                if (t >= criticalWindowEndLocal)
+                    break;
+
+                AddCriticalSegment(segments, cursor, t, current);
+                current = p.IsOnline;
+                cursor = t;
+            }
+
+            AddCriticalSegment(segments, cursor, criticalWindowEndLocal, current);
+            criticalSegments[device.Id] = segments;
+        }
+    }
+
+    private void AddCriticalSegment(List<TimelineSegment> segments, DateTime start, DateTime end, bool? status)
+    {
+        if (end <= start)
+            return;
+
+        var minutes = (end - start).TotalMinutes;
+        if (minutes <= 0)
+            return;
+
+        var kind = status is null
+            ? TimelineKind.Unknown
+            : status.Value ? TimelineKind.Online : TimelineKind.Offline;
+
+        var widthPercent = minutes * 100.0 / criticalWindowMinutes;
+        segments.Add(new TimelineSegment(minutes, widthPercent, kind));
+    }
+
+    private sealed class Summary
+    {
+        public int TotalClients { get; set; }
+        public int TotalDevices { get; set; }
+        public int TotalWired { get; set; }
+        public int TotalWifi { get; set; }
+        public int OfflineClients { get; set; }
+        public int UnackedOfflineAlerts { get; set; }
+        public int UnackedDiscoveryAlerts { get; set; }
+        public int UnackedFirmwareAlerts { get; set; }
+        public int GatewayCount { get; set; }
+        public int SwitchCount { get; set; }
+        public int ApCount { get; set; }
+        public int GatewayOnline { get; set; }
+        public int GatewayOffline { get; set; }
+        public int SwitchOnline { get; set; }
+        public int SwitchOffline { get; set; }
+        public int ApOnline { get; set; }
+        public int ApOffline { get; set; }
+    }
+
+    private sealed class SubnetRow
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+        public string Cidr { get; set; } = "";
+        public int? VlanId { get; set; }
+
+        public int UsableCount { get; set; }
+        public int UsedIpCount { get; set; }
+        public int FreeIpCount { get; set; }
+
+        public int ClientCount { get; set; }
+        public int OfflineCount { get; set; }
+        public int DeviceCount { get; set; }
+    }
+
+    private sealed record DeviceLite(
+        int Id,
+        string Name,
+        int? SubnetId,
+        string? IpAddress,
+        string? ConnectionType,
+        bool IsOnline,
+        bool IsDevice,
+        bool IgnoreOffline,
+        bool IsStatusTracked,
+        string? ClientTypeName);
+
+    private static bool IsGatewayType(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        var n = name.Trim().ToLowerInvariant();
+        return n.Contains("gateway") || n.Contains("router");
+    }
+
+    private static bool IsSwitchType(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        var n = name.Trim().ToLowerInvariant();
+        return n.Contains("switch");
+    }
+
+    private static bool IsApType(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        var n = name.Trim().ToLowerInvariant();
+        return n.Contains("wireless ap") || n.Contains("access point") || n == "ap";
+    }
+
+    private sealed record EventPoint(int DeviceId, DateTime Local, bool IsOnline);
+
+    private enum TimelineKind
+    {
+        Online,
+        Offline,
+        Unknown
+    }
+
+    private sealed record TimelineSegment(
+        double Minutes,
+        double WidthPercent,
+        TimelineKind Kind);
+
+}

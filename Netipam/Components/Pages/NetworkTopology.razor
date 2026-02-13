@@ -1,0 +1,582 @@
+@page "/topology"
+@rendermode InteractiveServer
+
+@using Microsoft.EntityFrameworkCore
+@using MudBlazor
+@using Netipam.Data
+@using Netipam.Unifi
+
+@inject AppDbContext DbContext
+
+<MudStack Spacing="2">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <MudText Typo="Typo.h6">Network Topology</MudText>
+        <MudSpacer />
+        <MudTextField T="string"
+                      Placeholder="Search (name, IP, hostname, type...)"
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Filled.Search"
+                      Immediate="true"
+                      Class="me-2"
+                      @bind-Value="SearchText" />
+        <MudIconButton Icon="@Icons.Material.Filled.VerticalAlignCenter"
+                       Title="Collapse All"
+                       Size="Size.Medium"
+                       Color="Color.Primary"
+                       Class="toolbar-button download-icon-btn"
+                       OnClick="CollapseMapAll" />
+        <MudIconButton Icon="@Icons.Material.Filled.Expand"
+                       Title="Expand All"
+                       Size="Size.Medium"
+                       Color="Color.Success"
+                       Class="toolbar-button download-icon-btn"
+                       OnClick="ExpandMapAll" />
+        <MudMenu Dense="true" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Class="download-menu">
+            <ActivatorContent>
+                <MudIconButton Icon="@Icons.Material.Filled.Download"
+                               Title="Downloads"
+                               Size="Size.Medium"
+                               Class="toolbar-button download-icon-btn" />
+            </ActivatorContent>
+            <ChildContent>
+                <MudMenuItem Href="/export/topology.xlsx">Export Topology</MudMenuItem>
+            </ChildContent>
+        </MudMenu>
+    </MudStack>
+
+<style>
+    .download-icon-btn {
+        height: 26px;
+        width: 26px;
+        padding: 0;
+    }
+
+    .download-menu {
+        margin-right: 20px;
+    }
+</style>
+
+    @if (FilteredRoots.Count == 0)
+    {
+        <MudPaper Class="pa-3">
+            <MudText Typo="Typo.body2">No devices to display.</MudText>
+        </MudPaper>
+    }
+    else
+    {
+        <MudPaper Class="pa-2">
+            <MudStack Spacing="1">
+                @foreach (var root in FilteredRoots)
+                {
+                    @MapRow(root, 0)
+                }
+            </MudStack>
+        </MudPaper>
+    }
+
+    @if (FilteredUnassigned.Count > 0)
+    {
+        <MudExpansionPanels>
+            <MudExpansionPanel Text="@($"Unassigned / Unknown ({FilteredUnassigned.Count})")" DisableRipple="true">
+                <MudStack Spacing="1" Class="mt-1">
+                    @foreach (var u in FilteredUnassigned.OrderBy(i => i.Device.Name, StringComparer.OrdinalIgnoreCase))
+                    {
+                        <MudPaper Class="pa-2" Elevation="0">
+                            @HeaderRow(u.Device, u.ParentPortLabel, u.IsWifi, u.DisplayUpstreamConn ?? u.Device.ConnectionDetail)
+                            <MudStack Spacing="1">
+                                <MudText Typo="Typo.caption">@u.Device.Hostname</MudText>
+                                <MudText Typo="Typo.caption">@u.Device.ClientType?.Name</MudText>
+                                <MudText Typo="Typo.caption">@FormatIpWithPort(u.Device)</MudText>
+                            </MudStack>
+                        </MudPaper>
+                    }
+                </MudStack>
+            </MudExpansionPanel>
+        </MudExpansionPanels>
+    }
+
+</MudStack>
+
+@code {
+    private readonly List<TopoItem> items = new();
+    private readonly List<TopoItem> roots = new();
+    private readonly List<TopoItem> unassigned = new();
+    private readonly Dictionary<int, TopoItem> byDeviceId = new();
+    private readonly Dictionary<int, List<TopoItem>> childrenByParent = new();
+    private readonly HashSet<int> matchIds = new();
+    private readonly HashSet<int> visibleIds = new();
+    private HashSet<int>? savedExpanded;
+    private string? searchText;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var devices = await DbContext.Devices
+            .AsNoTracking()
+            .Include(d => d.ClientType)
+            .OrderBy(d => d.Name)
+            .ToListAsync();
+
+        var byId = devices.ToDictionary(d => d.Id);
+        var byName = BuildNameLookup(devices);
+        var byMac = BuildMacLookup(devices);
+
+        items.AddRange(devices.Select(d =>
+        {
+            var parent = ResolveParent(d, byId, byName, byMac);
+            var upstreamName = parent?.Name ?? d.UpstreamDeviceName ?? ExtractUpstreamNameFromDetail(d.ConnectionDetail);
+        var upstreamConn = d.HostDeviceId is not null ? "Hosted" : d.UpstreamConnection ?? d.ConnectionDetail;
+            var port = ExtractPort(upstreamConn);
+            var isWifi = IsWifi(d, upstreamConn);
+
+            return new TopoItem
+            {
+                Device = d,
+                ParentDeviceId = parent?.Id,
+                ParentName = parent?.Name,
+                ParentPort = port,
+                IsWifi = isWifi,
+                DisplayUpstreamName = upstreamName,
+                DisplayUpstreamMac = d.UpstreamDeviceMac,
+                DisplayUpstreamConn = upstreamConn
+            };
+        }));
+
+    unassigned.AddRange(items.Where(IsUnassigned));
+    roots.AddRange(items.Where(i =>
+        !IsUnassigned(i) &&
+        (i.Device.IsTopologyRoot ||
+         i.ParentDeviceId is null ||
+         !byId.ContainsKey(i.ParentDeviceId.Value) ||
+         (IsGateway(i.Device) && i.ParentDeviceId is null))));
+
+        foreach (var item in items)
+            byDeviceId[item.Device.Id] = item;
+
+        foreach (var group in items
+                     .Where(i => i.ParentDeviceId is not null)
+                     .GroupBy(i => i.ParentDeviceId!.Value))
+        {
+            childrenByParent[group.Key] = group
+                .OrderBy(c => c.ParentPort ?? int.MaxValue)
+                .ThenBy(c => c.Device.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        ApplySearch();
+    }
+
+    private RenderFragment HeaderRow(Device d, string? portLabel, bool isWifi, string? connDetail) => @<MudStack Row="true" AlignItems="MudBlazor.AlignItems.Center" Justify="MudBlazor.Justify.SpaceBetween" Spacing="1">
+        <MudStack Row="true" AlignItems="MudBlazor.AlignItems.Center" Spacing="1">
+            @if (isWifi)
+            {
+                <MudTooltip Text="@GetConnTooltip(d, connDetail)">
+                    <MudIcon Icon="@Icons.Material.Filled.Wifi"
+                             Color="@GetWifiColor(connDetail)" />
+                </MudTooltip>
+            }
+            else
+            {
+                <MudIcon Icon="@Icons.Material.Filled.DeviceHub" Color="Color.Primary" />
+            }
+            @if (TryBuildAccessLink(d.AccessLink, out var accessHref))
+            {
+                <MudLink Href="@accessHref"
+                         Target="_blank"
+                         Rel="noopener noreferrer"
+                         Underline="Underline.Always"
+                         Style="font-size:inherit; font-weight:600">
+                    @d.Name
+                </MudLink>
+            }
+            else
+            {
+                <MudText Typo="Typo.subtitle1">@d.Name</MudText>
+            }
+            <MudText Typo="Typo.caption">@FormatIpWithPort(d)</MudText>
+            <MudText Typo="Typo.caption">@d.ClientType?.Name</MudText>
+            @if (!string.IsNullOrWhiteSpace(portLabel))
+            {
+                <MudChip T="string" Variant="Variant.Outlined" Size="Size.Small" Color="Color.Secondary">
+                    @portLabel
+                </MudChip>
+            }
+        </MudStack>
+
+        <MudChip T="string"
+                 Color="@(d.IsStatusTracked ? (d.IsOnline ? Color.Success : Color.Error) : Color.Default)"
+                 Variant="Variant.Filled"
+                 Size="Size.Small"
+                 Icon="@Icons.Material.Filled.Circle">
+            @(d.IsStatusTracked ? (d.IsOnline ? "Online" : "Offline") : "Not Tracked")
+        </MudChip>
+    </MudStack>;
+
+    private RenderFragment MapRow(TopoItem node, int depth) => @<MudPaper Class="pa-2 mb-1" Elevation="0" Style=$"margin-left:{(int)(depth * 24)}px">
+        @{
+            var hasChildren = HasChildren(node.Device.Id);
+            var expanded = mapExpanded.Contains(node.Device.Id);
+            var emphasis = hasChildren ? "font-weight:600" : null;
+            var style = $"margin-left:{(int)(depth * 24)}px";
+            if (depth > 0)
+            {
+                style += ";border-left:1px solid rgba(0,0,0,0.12);padding-left:8px";
+            }
+            if (HasSearch && matchIds.Contains(node.Device.Id))
+            {
+                style += ";background-color:rgba(255,235,59,0.18)";
+            }
+        }
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Style="@style">
+            <MudIcon Icon="@Icons.Material.Filled.Circle"
+                     Color="@(node.Device.IsStatusTracked ? (node.Device.IsOnline ? Color.Success : Color.Error) : Color.Default)"
+                     Size="Size.Small"
+                     Style="font-size:12px;" />
+            @if (node.IsWifi)
+            {
+                var nodeConnDetail = node.DisplayUpstreamConn ?? node.Device.ConnectionDetail;
+                <MudTooltip Text="@GetConnTooltip(node.Device, nodeConnDetail)">
+                    <MudIcon Icon="@Icons.Material.Filled.Wifi"
+                             Color="@GetWifiColor(nodeConnDetail)" />
+                </MudTooltip>
+            }
+            else
+            {
+                <MudIcon Icon="@Icons.Material.Filled.DeviceHub" Color="Color.Primary" />
+            }
+            @if (!string.IsNullOrWhiteSpace(node.ParentPortLabel))
+            {
+                <MudChip T="string" Variant="Variant.Outlined" Size="Size.Small" Color="Color.Primary">
+                    @node.ParentPortLabel
+                </MudChip>
+            }
+            @if (TryBuildAccessLink(node.Device.AccessLink, out var nodeHref))
+            {
+                <MudLink Href="@nodeHref"
+                         Target="_blank"
+                         Rel="noopener noreferrer"
+                         Underline="Underline.Always"
+                         Style="font-size:inherit; font-weight:600">
+                    @node.Device.Name
+                </MudLink>
+            }
+            else
+            {
+                <MudText Typo="@(hasChildren ? Typo.subtitle1 : Typo.subtitle2)" Style="@emphasis">
+                    @node.Device.Name
+                </MudText>
+            }
+            <MudText Typo="Typo.caption">@node.Device.ClientType?.Name</MudText>
+            <MudText Typo="Typo.caption">@FormatIpWithPort(node.Device)</MudText>
+            
+            @if (hasChildren)
+            {
+                <MudIconButton Icon="@(expanded ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                               Color="Color.Tertiary"
+                               Size="Size.Medium"
+                               OnClick="@(() => ToggleMapNode(node.Device.Id))" />
+            }
+        </MudStack>
+        @if (expanded)
+        {
+            var children = GetChildren(node.Device.Id);
+            foreach (var child in children)
+            {
+                @MapRow(child, depth + 1)
+            }
+        }
+    </MudPaper>;
+
+    private sealed class TopoItem
+    {
+        public required Device Device { get; init; }
+        public string? ParentName { get; init; }
+        public int? ParentDeviceId { get; init; }
+        public int? ParentPort { get; init; }
+        public bool IsWifi { get; init; }
+        public string? DisplayUpstreamName { get; init; }
+        public string? DisplayUpstreamMac { get; init; }
+        public string? DisplayUpstreamConn { get; init; }
+        public string? ParentPortLabel => ParentPort is null ? null : $"port {ParentPort.Value}";
+    }
+
+    // Map expand state
+    private readonly HashSet<int> mapExpanded = new();
+
+    private void ToggleMapNode(int id)
+    {
+        if (mapExpanded.Contains(id))
+            mapExpanded.Remove(id);
+        else
+            mapExpanded.Add(id);
+    }
+
+    private void CollapseMapAll()
+    {
+        mapExpanded.Clear();
+        StateHasChanged();
+    }
+
+    private void ExpandMapAll()
+    {
+        mapExpanded.Clear();
+        foreach (var node in items.Where(t => HasChildren(t.Device.Id)))
+            mapExpanded.Add(node.Device.Id);
+        StateHasChanged();
+    }
+
+    private bool HasChildren(int deviceId) => childrenByParent.TryGetValue(deviceId, out var list) && list.Count > 0;
+
+    private IReadOnlyList<TopoItem> GetChildren(int deviceId)
+        => childrenByParent.TryGetValue(deviceId, out var list) ? list : Array.Empty<TopoItem>();
+
+    private string? SearchText
+    {
+        get => searchText;
+        set
+        {
+            searchText = value;
+            ApplySearch();
+            StateHasChanged();
+        }
+    }
+
+    private bool HasSearch => !string.IsNullOrWhiteSpace(searchText);
+
+    private List<TopoItem> FilteredRoots
+        => !HasSearch ? roots : roots.Where(r => visibleIds.Contains(r.Device.Id)).ToList();
+
+    private List<TopoItem> FilteredUnassigned
+        => !HasSearch ? unassigned : unassigned.Where(u => matchIds.Contains(u.Device.Id)).ToList();
+
+    private void ApplySearch()
+    {
+        matchIds.Clear();
+        visibleIds.Clear();
+
+        if (!HasSearch)
+        {
+            if (savedExpanded is not null)
+            {
+                mapExpanded.Clear();
+                foreach (var id in savedExpanded)
+                    mapExpanded.Add(id);
+                savedExpanded = null;
+            }
+
+            return;
+        }
+
+        savedExpanded ??= new HashSet<int>(mapExpanded);
+        mapExpanded.Clear();
+
+        var term = searchText!.Trim();
+
+        foreach (var item in items)
+        {
+            if (IsSearchMatch(item, term))
+                matchIds.Add(item.Device.Id);
+        }
+
+        foreach (var id in matchIds)
+        {
+            AddAncestors(id);
+            AddDescendants(id);
+        }
+    }
+
+    private void AddAncestors(int id)
+    {
+        if (!byDeviceId.TryGetValue(id, out var current))
+            return;
+
+        var parentId = current.ParentDeviceId;
+        while (parentId is not null && byDeviceId.ContainsKey(parentId.Value))
+        {
+            var pid = parentId.Value;
+            visibleIds.Add(pid);
+            mapExpanded.Add(pid);
+            parentId = byDeviceId[pid].ParentDeviceId;
+        }
+
+        visibleIds.Add(id);
+        if (HasChildren(id))
+            mapExpanded.Add(id);
+    }
+
+    private void AddDescendants(int id)
+    {
+        if (!childrenByParent.TryGetValue(id, out var list))
+            return;
+
+        foreach (var child in list)
+        {
+            visibleIds.Add(child.Device.Id);
+            AddDescendants(child.Device.Id);
+        }
+    }
+
+    private static bool IsSearchMatch(TopoItem item, string term)
+    {
+        var d = item.Device;
+        return Contains(d.Name, term) ||
+               Contains(d.Hostname, term) ||
+               Contains(d.IpAddress, term) ||
+               Contains(d.MacAddress, term) ||
+               Contains(d.ClientType?.Name, term) ||
+               Contains(d.UpstreamDeviceName, term) ||
+               Contains(d.ConnectionDetail, term);
+    }
+
+    private static bool Contains(string? value, string term)
+        => !string.IsNullOrWhiteSpace(value) &&
+           value.Contains(term, StringComparison.OrdinalIgnoreCase);
+
+    private static Device? ResolveParent(
+        Device d,
+        IDictionary<int, Device> byId,
+        IDictionary<string, Device> byName,
+        IDictionary<string, Device> byMac)
+    {
+        if (d.IsTopologyRoot)
+            return null;
+
+        // Prefer host relationship for guests
+        if (d.HostDeviceId is int hid && byId.TryGetValue(hid, out var host))
+            return host;
+
+        if (d.ManualUpstreamDeviceId is int mid && byId.TryGetValue(mid, out var manual))
+            return manual;
+
+        if (d.ParentDeviceId is int pid && byId.TryGetValue(pid, out var p1))
+            return p1;
+
+        if (!string.IsNullOrWhiteSpace(d.UpstreamDeviceName))
+        {
+            var key = d.UpstreamDeviceName.Trim();
+            if (byName.TryGetValue(key, out var p2))
+                return p2;
+        }
+
+        var parsedName = ExtractUpstreamNameFromDetail(d.ConnectionDetail);
+        if (!string.IsNullOrWhiteSpace(parsedName) && byName.TryGetValue(parsedName, out var p4))
+            return p4;
+
+        var upstreamMac = NormalizeMac(d.UpstreamDeviceMac);
+        if (!string.IsNullOrWhiteSpace(upstreamMac) && byMac.TryGetValue(upstreamMac, out var p3))
+            return p3;
+
+        return null;
+    }
+
+    private static int? ExtractPort(string? detail)
+    {
+        if (string.IsNullOrWhiteSpace(detail))
+            return null;
+
+        foreach (var p in detail.Split('|', StringSplitOptions.RemoveEmptyEntries).Select(p => p.Trim()))
+        {
+            if (p.StartsWith("port", StringComparison.OrdinalIgnoreCase))
+            {
+                var tokens = p.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (tokens.Length >= 2 && int.TryParse(tokens[^1], out var num))
+                    return num;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsWifi(Device d, string? connection)
+    {
+        if (!string.IsNullOrWhiteSpace(d.ConnectionType) &&
+            d.ConnectionType.Trim().Equals("wifi", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var conn = connection ?? "";
+        return conn.Contains("ghz", StringComparison.OrdinalIgnoreCase) ||
+               conn.Contains("wifi", StringComparison.OrdinalIgnoreCase) ||
+               conn.Contains("@", StringComparison.Ordinal);
+    }
+
+    private static string GetConnTooltip(Device d, string? detail)
+    {
+        var ct = Safe(d.ConnectionType);
+        var cd = Safe(detail);
+        return cd == "-" ? ct : $"{ct} | {cd}";
+    }
+
+    private static bool IsUnassigned(TopoItem item)
+        => item.ParentDeviceId is null &&
+           string.IsNullOrWhiteSpace(item.DisplayUpstreamName) &&
+           string.IsNullOrWhiteSpace(item.DisplayUpstreamConn) &&
+           !item.Device.IsTopologyRoot &&
+           !IsGateway(item.Device);
+
+    private static bool IsGateway(Device d)
+    {
+        var typeName = d.ClientType?.Name ?? "";
+        return typeName.Contains("gateway", StringComparison.OrdinalIgnoreCase) ||
+               typeName.Contains("router", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static Dictionary<string, Device> BuildNameLookup(IEnumerable<Device> devices)
+    {
+        var dict = new Dictionary<string, Device>(StringComparer.OrdinalIgnoreCase);
+        foreach (var d in devices.Where(d => !string.IsNullOrWhiteSpace(d.Name)))
+        {
+            var key = d.Name!.Trim();
+            if (!dict.ContainsKey(key))
+                dict[key] = d;
+        }
+        return dict;
+    }
+
+    private static Dictionary<string, Device> BuildMacLookup(IEnumerable<Device> devices)
+    {
+        var dict = new Dictionary<string, Device>(StringComparer.OrdinalIgnoreCase);
+        foreach (var d in devices)
+        {
+            var key = NormalizeMac(d.MacAddress);
+            if (string.IsNullOrWhiteSpace(key) || dict.ContainsKey(key))
+                continue;
+            dict[key] = d;
+        }
+        return dict;
+    }
+
+    private static string NormalizeMac(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+            return "";
+
+        Span<char> buffer = stackalloc char[raw.Length];
+        var len = 0;
+        foreach (var ch in raw)
+        {
+            if (char.IsLetterOrDigit(ch))
+                buffer[len++] = char.ToUpperInvariant(ch);
+        }
+
+        return new string(buffer[..len]);
+    }
+
+    private static string? ExtractUpstreamNameFromDetail(string? detail)
+    {
+        if (string.IsNullOrWhiteSpace(detail))
+            return null;
+
+        var trimmed = detail.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+            return null;
+
+        var pipeIndex = trimmed.IndexOf('|', StringComparison.Ordinal);
+        if (pipeIndex > 0)
+            return trimmed[..pipeIndex].Trim();
+
+        var parenIndex = trimmed.IndexOf(" (", StringComparison.Ordinal);
+        if (parenIndex > 0)
+            return trimmed[..parenIndex].Trim();
+
+        return null;
+    }
+}

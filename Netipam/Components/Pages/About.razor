@@ -1,0 +1,27 @@
+@page "/about"
+@rendermode InteractiveServer
+
+@using MudBlazor
+@using System.Reflection
+
+<MudStack Spacing="2">
+    <MudText Typo="Typo.h6">About Netipam</MudText>
+
+    <MudPaper Class="pa-4" Elevation="1">
+        <MudStack Spacing="1">
+            <MudText Typo="Typo.subtitle1">Version</MudText>
+            <MudText Typo="Typo.body1">@AppVersion</MudText>
+
+            <MudDivider Class="my-2" />
+
+            <MudText Typo="Typo.subtitle1">Netipam Website</MudText>
+            <MudLink Href="https://netipam.com" Target="_blank">netipam.com</MudLink>
+        </MudStack>
+    </MudPaper>
+</MudStack>
+
+@code {
+    private static string AppVersion
+        => Assembly.GetExecutingAssembly().GetName().Version?.ToString()
+           ?? "Unknown";
+}

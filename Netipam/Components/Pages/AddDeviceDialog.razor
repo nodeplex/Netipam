@@ -1,0 +1,528 @@
+﻿@using MudBlazor
+@using Microsoft.EntityFrameworkCore
+@using System.Globalization
+@using Netipam.Data
+@using Netipam.Helpers
+
+@inject AppDbContext DbContext
+
+<MudDialog>
+    <DialogContent>
+        @if (loading)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else
+        {
+            <MudStack Spacing="2">
+
+                <MudTextField T="string"
+                              Label="Name"
+                              @bind-Value="device.Name"
+                              Required="true"
+                              RequiredError="Name is required."
+                              Disabled="@busy" />
+
+                <MudSelect T="int?"
+                           Label="@TypeLabel"
+                           @bind-Value="device.ClientTypeId"
+                           Clearable="@(RequireClientType ? false : true)"
+                           Required="@RequireClientType"
+                           RequiredError="@($"{TypeLabel} is required.")"
+                           Disabled="@busy">
+                    @foreach (var t in clientTypes)
+                    {
+                        <MudSelectItem T="int?" Value="@t.Id">@t.Name</MudSelectItem>
+                    }
+                </MudSelect>
+
+                @if (!DevicesOnly)
+                {
+                    <MudSelect T="int?"
+                               Label="Host"
+                               @bind-Value="device.HostDeviceId"
+                               Clearable="true"
+                               Disabled="@busy"
+                               HelperText="Select the host this client/device runs on (only types marked IsHost appear).">
+                        @foreach (var h in hostDevices)
+                        {
+                            <MudSelectItem T="int?" Value="@h.Id">@HostDisplay(h)</MudSelectItem>
+                        }
+                    </MudSelect>
+                }
+
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" sm="6">
+                        <MudSwitch T="bool"
+                                   @bind-Value="device.IsTopologyRoot"
+                                   Color="Color.Primary"
+                                   Disabled="@busy"
+                                   Label="Topology Root" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudSwitch T="bool"
+                                   @bind-Value="device.IsCritical"
+                                   Color="Color.Primary"
+                                   Disabled="@busy"
+                                   Label="Critical Device" />
+                    </MudItem>
+                </MudGrid>
+
+                <MudTextField T="string" Label="Asset #" @bind-Value="device.AssetNumber" Disabled="@busy" />
+                <MudTextField T="string" Label="Hostname" @bind-Value="device.Hostname" Disabled="@busy" />
+                <MudTextField T="string" Label="IP Address" @bind-Value="device.IpAddress" Disabled="@busy" />
+                <MudTextField T="string" Label="MAC Address" @bind-Value="device.MacAddress" Disabled="@busy" />
+
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" sm="6">
+                        <MudSwitch T="bool"
+                                   @bind-Value="device.IsStatusTracked"
+                                   Color="Color.Primary"
+                                   Disabled="@busy"
+                                   Label="Track Online Status"
+                                   HelperText="If off, status is shown as Not Tracked and excluded from offline alerts/history." />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudSwitch T="bool"
+                                   @bind-Value="device.IgnoreOffline"
+                                   Color="Color.Primary"
+                                   Disabled="@busy"
+                                   Label="Ignore Offline" />
+                    </MudItem>
+                </MudGrid>
+
+                <MudSelect T="DeviceMonitorMode"
+                           Label="Monitor Mode"
+                           @bind-Value="device.MonitorMode"
+                           Disabled="@busy"
+                           HelperText="Normal uses UniFi+Ping. Use port/HTTP checks for host-IP containers.">
+                    <MudSelectItem T="DeviceMonitorMode" Value="DeviceMonitorMode.Normal">Normal (UniFi+Ping)</MudSelectItem>
+                    <MudSelectItem T="DeviceMonitorMode" Value="DeviceMonitorMode.PingOnly">Ping only</MudSelectItem>
+                    <MudSelectItem T="DeviceMonitorMode" Value="DeviceMonitorMode.PortOnly">TCP port only</MudSelectItem>
+                    <MudSelectItem T="DeviceMonitorMode" Value="DeviceMonitorMode.PingAndPort">Ping + TCP port</MudSelectItem>
+                    <MudSelectItem T="DeviceMonitorMode" Value="DeviceMonitorMode.HttpOnly">HTTP only</MudSelectItem>
+                    <MudSelectItem T="DeviceMonitorMode" Value="DeviceMonitorMode.PingAndHttp">Ping + HTTP</MudSelectItem>
+                </MudSelect>
+                @if (UsesPort(device.MonitorMode) || UsesHttp(device.MonitorMode))
+                {
+                    <MudNumericField T="int?"
+                                     Label="Monitor Port"
+                                     Min="1"
+                                     Max="65535"
+                                     Step="1"
+                                     Required="true"
+                                     RequiredError="Port is required for this monitor mode."
+                                     @bind-Value="device.MonitorPort"
+                                     Disabled="@busy" />
+                }
+                @if (UsesHttp(device.MonitorMode))
+                {
+                    <MudTextField T="string"
+                                  Label="HTTP Path"
+                                  Placeholder="/"
+                                  @bind-Value="device.MonitorHttpPath"
+                                  Disabled="@busy" />
+                    <MudSwitch T="bool"
+                               @bind-Value="device.MonitorUseHttps"
+                               Color="Color.Primary"
+                               Disabled="@busy"
+                               Label="Use HTTPS" />
+                }
+
+                <MudSelect T="int?"
+                           Label="Manual Upstream Device"
+                           @bind-Value="device.ManualUpstreamDeviceId"
+                           Clearable="true"
+                           Disabled="@(busy || device.IsTopologyRoot)"
+                           HelperText="Optional. Overrides upstream device for topology only.">
+                    @foreach (var u in upstreamDevices)
+                    {
+                        <MudSelectItem T="int?" Value="@u.Id">@UpstreamDisplay(u)</MudSelectItem>
+                    }
+                </MudSelect>
+
+                <MudSelect T="int?"
+                           Label="Location"
+                           @bind-Value="device.LocationId"
+                           Clearable="true"
+                           Disabled="@busy">
+                    @foreach (var l in locations)
+                    {
+                        <MudSelectItem T="int?" Value="@l.Id">@l.Name</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudSelect T="int?"
+                           Label="Rack"
+                           @bind-Value="device.RackId"
+                           Clearable="true"
+                           Disabled="@busy">
+                    @foreach (var r in racks)
+                    {
+                        <MudSelectItem T="int?" Value="@r.Id">@r.Name</MudSelectItem>
+                    }
+                </MudSelect>
+                <MudNumericField T="int?"
+                                 Label="Rack U Position (bottom-up)"
+                                 Min="1"
+                                 Max="60"
+                                 Step="1"
+                                 @bind-Value="device.RackUPosition"
+                                 HelperText="Optional. U1 is the bottom."
+                                 Disabled="@(busy || device.RackId is null)" />
+                <MudNumericField T="int?"
+                                 Label="Rack U Size"
+                                 Min="1"
+                                 Max="10"
+                                 Step="1"
+                                 @bind-Value="device.RackUSize"
+                                 HelperText="Optional. Typical sizes: 1–4."
+                                 Disabled="@(busy || device.RackId is null)" />
+
+                <MudTextField T="string" Label="Manufacturer" @bind-Value="device.Manufacturer" Disabled="@busy" />
+                <MudTextField T="string" Label="Model" @bind-Value="device.Model" Disabled="@busy" />
+                <MudTextField T="string" Label="Operating System" @bind-Value="device.OperatingSystem" Disabled="@busy" />
+
+                @if (DevicesOnly)
+                {
+                    <MudTextField T="string" Label="Source" @bind-Value="device.Source" Disabled="@busy" />
+
+                    <MudSelect T="string" Label="Used/New" @bind-Value="device.UsedNew" Clearable="true" Disabled="@busy">
+                        <MudSelectItem T="string" Value="@("New")">New</MudSelectItem>
+                        <MudSelectItem T="string" Value="@("Used")">Used</MudSelectItem>
+                    </MudSelect>
+
+                    <MudTextField T="string"
+                                  Label="Source Date (MMM-YYYY)"
+                                  Placeholder="Aug-2025"
+                                  @bind-Value="sourceDateText"
+                                  Immediate="true"
+                                  Validation="ValidateSourceDate"
+                                  HelperText="Month-Year only (e.g., Aug-2025). Leave blank if unknown."
+                                  Disabled="@busy" />
+                }
+
+                <MudTextField T="string"
+                              Label="Access Link"
+                              Placeholder="https://device.example.com"
+                              HelperText="Full URL to open this device in a new tab."
+                              @bind-Value="device.AccessLink"
+                              Disabled="@busy" />
+                <MudSelect T="int?"
+                           Label="Access Category"
+                           @bind-Value="device.AccessCategoryId"
+                           Clearable="true"
+                           Disabled="@busy"
+                           HelperText="Optional grouping used on the Access Panel.">
+                    @foreach (var c in accessCategories)
+                    {
+                        <MudSelectItem T="int?" Value="@c.Id">@c.Name</MudSelectItem>
+                    }
+                </MudSelect>
+
+                <MudTextField T="string" Label="Notes" @bind-Value="device.Description" Lines="3" Disabled="@busy" />
+
+            </MudStack>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Color="Color.Secondary"
+                   Variant="Variant.Text"
+                   OnClick="Cancel"
+                   Disabled="@busy">
+            Cancel
+        </MudButton>
+
+        <MudButton Color="Color.Primary"
+                   Variant="Variant.Filled"
+                   OnClick="Save"
+                   Disabled="@((busy) || (loading))">
+            @SubmitLabel
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public bool DevicesOnly { get; set; }
+    [Parameter] public bool RequireClientType { get; set; }
+    [Parameter] public string? IpAddress { get; set; }
+
+    private readonly Device device = new();
+    private List<ClientType> clientTypes = new();
+    private List<AccessCategory> accessCategories = new();
+    private List<Location> locations = new();
+    private List<Rack> racks = new();
+    private List<Device> upstreamDevices = new();
+    private List<Device> hostDevices = new();
+
+    private bool loading = true;
+    private bool busy;
+
+    private string? sourceDateText;
+
+    protected override async Task OnInitializedAsync()
+    {
+        clientTypes = await DbContext.ClientTypes
+            .AsNoTracking()
+            .OrderBy(t => t.Name)
+            .ToListAsync();
+
+        if (DevicesOnly)
+            clientTypes = clientTypes.Where(ct => ct.IsDevice).ToList();
+
+        accessCategories = await DbContext.AccessCategories
+            .AsNoTracking()
+            .OrderBy(c => c.Name)
+            .ToListAsync();
+
+        locations = await DbContext.Locations
+            .AsNoTracking()
+            .OrderBy(l => l.Name)
+            .ToListAsync();
+
+        racks = await DbContext.Racks
+            .AsNoTracking()
+            .OrderBy(r => r.Name)
+            .ToListAsync();
+
+        device.IsStatusTracked = true;
+        device.MonitorMode = DeviceMonitorMode.Normal;
+        device.MonitorHttpPath = "/";
+
+        hostDevices = await DbContext.Devices
+            .AsNoTracking()
+            .Include(d => d.ClientType)
+            .Where(d => d.ClientType != null && d.ClientType.IsHost)
+            .OrderBy(d => d.Name)
+            .ToListAsync();
+
+        upstreamDevices = await DbContext.Devices
+            .AsNoTracking()
+            .OrderBy(d => d.Name)
+            .ToListAsync();
+
+        if (!string.IsNullOrWhiteSpace(IpAddress))
+            device.IpAddress = IpAddress.Trim();
+
+        loading = false;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task Save()
+    {
+        if (loading) return;
+        if (busy) return;
+        busy = true;
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(device.Name))
+                return;
+
+            if (RequireClientType && device.ClientTypeId is null)
+                return;
+
+            // Trim common strings
+            device.Name = device.Name.Trim();
+            device.Hostname = device.Hostname?.Trim();
+            device.IpAddress = device.IpAddress?.Trim();
+            device.MacAddress = device.MacAddress?.Trim();
+            device.AccessLink = device.AccessLink?.Trim();
+            device.MonitorHttpPath = NormalizeHttpPath(device.MonitorHttpPath);
+
+            if (device.MonitorMode == DeviceMonitorMode.Normal)
+            {
+                device.MonitorPort = null;
+                device.MonitorUseHttps = false;
+                device.MonitorHttpPath = null;
+            }
+            else
+            {
+                if ((UsesPort(device.MonitorMode) || UsesHttp(device.MonitorMode)) && device.MonitorPort is null)
+                    return;
+
+                if (!UsesPort(device.MonitorMode))
+                    device.MonitorPort = null;
+
+                if (!UsesHttp(device.MonitorMode))
+                {
+                    device.MonitorUseHttps = false;
+                    device.MonitorHttpPath = null;
+                }
+            }
+
+            device.AssetNumber = device.AssetNumber?.Trim();
+            device.Source = device.Source?.Trim();
+            device.UsedNew = device.UsedNew?.Trim();
+
+            device.Manufacturer = device.Manufacturer?.Trim();
+            device.Model = device.Model?.Trim();
+            device.OperatingSystem = device.OperatingSystem?.Trim();
+            device.Usage = device.Usage?.Trim();
+            device.Description = device.Description?.Trim();
+
+            if (device.LocationId is not null)
+            {
+                var loc = locations.FirstOrDefault(l => l.Id == device.LocationId.Value);
+                device.Location = loc?.Name;
+            }
+            else
+            {
+                device.Location = null;
+            }
+
+            if (device.RackId is null)
+            {
+                device.RackUPosition = null;
+                device.RackUSize = null;
+            }
+
+            if (device.IsTopologyRoot)
+                device.ManualUpstreamDeviceId = null;
+
+            // Parse SourceDate (Month-Year only)
+            if (string.IsNullOrWhiteSpace(sourceDateText))
+            {
+                device.SourceDate = null;
+            }
+            else
+            {
+                if (!TryParseMonthYear(sourceDateText.Trim(), out var d))
+                    return; // keep dialog open; validation message will show
+
+                device.SourceDate = d;
+            }
+
+            // Link subnet from IP
+            device.SubnetId = await ResolveSubnetIdForIpAsync(device.IpAddress);
+
+            DbContext.Devices.Add(device);
+            await DbContext.SaveChangesAsync();
+
+            await IpHistoryHelper.TrackIpChangeAsync(DbContext, device, "Manual", DateTime.UtcNow);
+            await DbContext.SaveChangesAsync();
+
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private string? ValidateSourceDate(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        return TryParseMonthYear(value.Trim(), out _)
+            ? null
+            : "Use format like Aug-2025.";
+    }
+
+    private static bool TryParseMonthYear(string value, out DateOnly date)
+    {
+        date = default;
+
+        // Accept "Aug-2025" or "Aug 2025"
+        var normalized = value.Replace(' ', '-');
+
+        if (DateTime.TryParseExact(
+                normalized,
+                "MMM-yyyy",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var dt))
+        {
+            date = new DateOnly(dt.Year, dt.Month, 1);
+            return true;
+        }
+
+        return false;
+    }
+
+    private async Task<int?> ResolveSubnetIdForIpAsync(string? ip)
+    {
+        if (string.IsNullOrWhiteSpace(ip))
+            return null;
+
+        if (!IpCidr.TryParseIPv4(ip.Trim(), out var ipUInt, out _))
+            return null;
+
+        var subnets = await DbContext.Subnets
+            .AsNoTracking()
+            .Select(s => new { s.Id, s.Cidr })
+            .ToListAsync();
+
+        foreach (var s in subnets)
+        {
+            if (string.IsNullOrWhiteSpace(s.Cidr))
+                continue;
+
+            if (!IpCidr.TryParseIPv4Cidr(s.Cidr, out var info, out _))
+                continue;
+
+            if (ipUInt >= info.NetworkUInt && ipUInt <= info.BroadcastUInt)
+                return s.Id;
+        }
+
+        return null;
+    }
+
+    private static string UpstreamDisplay(Device d)
+    {
+        var parts = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(d.Name))
+            parts.Add(d.Name.Trim());
+
+        if (!string.IsNullOrWhiteSpace(d.Hostname))
+            parts.Add(d.Hostname.Trim());
+
+        if (!string.IsNullOrWhiteSpace(d.IpAddress))
+            parts.Add(d.IpAddress.Trim());
+
+        return parts.Count switch
+        {
+            0 => $"Device #{d.Id}",
+            1 => parts[0],
+            _ => $"{parts[0]} ({string.Join(" • ", parts.Skip(1))})"
+        };
+    }
+
+    private string TypeLabel => DevicesOnly ? "Device Type" : "Client Type";
+    private string SubmitLabel => DevicesOnly ? "Add Device" : "Add Client";
+
+    private static string HostDisplay(Device d)
+    {
+        var parts = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(d.Name))
+            parts.Add(d.Name.Trim());
+
+        if (!string.IsNullOrWhiteSpace(d.Hostname))
+            parts.Add(d.Hostname.Trim());
+
+        if (!string.IsNullOrWhiteSpace(d.IpAddress))
+            parts.Add(d.IpAddress.Trim());
+
+        return parts.Count switch
+        {
+            0 => $"Host #{d.Id}",
+            1 => parts[0],
+            _ => $"{parts[0]} ({string.Join(" • ", parts.Skip(1))})"
+        };
+    }
+
+    private static string? NormalizeHttpPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return "/";
+
+        var trimmed = path.Trim();
+        return trimmed.StartsWith('/') ? trimmed : "/" + trimmed;
+    }
+}

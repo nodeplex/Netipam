@@ -1,0 +1,493 @@
+@page "/racks"
+@using MudBlazor
+@using Microsoft.EntityFrameworkCore
+@using Netipam.Data
+@using Netipam.Services
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject AppDbContext DbContext
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthStateProvider
+
+<MudStack Spacing="2">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+        <MudText Typo="Typo.h6">Racks</MudText>
+        <MudSpacer />
+        @if (_canEdit)
+        {
+            <MudIconButton Icon="@Icons.Material.Filled.AddBox"
+                           Title="Add Rack"
+                           Size="Size.Medium"
+                           Class="toolbar-button download-icon-btn add-icon"
+                           OnClick="OpenAdd" />
+        }
+    </MudStack>
+
+    <MudTable T="Rack" Items="@racks" Dense="true" Hover="true" Bordered="true" Striped="true">
+        <HeaderContent>
+            <MudTh>Name</MudTh>
+            <MudTh>Location</MudTh>
+            <MudTh>Description</MudTh>
+            <MudTh>Size (U)</MudTh>
+            <MudTh>Items</MudTh>
+            <MudTh>U Used</MudTh>
+            <MudTh>U Free</MudTh>
+            @if (_canEdit)
+            {
+                <MudTh style="width:120px;"></MudTh>
+            }
+        </HeaderContent>
+
+        <RowTemplate Context="r">
+            <MudTd DataLabel="Name">@r.Name</MudTd>
+            <MudTd DataLabel="Location">@r.LocationRef?.Name</MudTd>
+            <MudTd DataLabel="Description">@r.Description</MudTd>
+            <MudTd DataLabel="Size (U)">@((r.RackUnits?.ToString() ?? "Default"))</MudTd>
+            <MudTd DataLabel="Items">@((devicesByRack.TryGetValue(r.Id, out var list) ? list.Count : 0))</MudTd>
+            <MudTd DataLabel="U Used">@GetUsedUnits(r.Id)</MudTd>
+            <MudTd DataLabel="U Free">@GetFreeUnits(r.Id)</MudTd>
+            @if (_canEdit)
+            {
+                <MudTd DataLabel="Actions">
+                    <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small"
+                                   OnClick="@(() => OpenEdit(r.Id))" />
+                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+                                   OnClick="@(() => ConfirmDelete(r.Id))" />
+                </MudTd>
+            }
+        </RowTemplate>
+
+        <NoRecordsContent>
+            <MudText Typo="Typo.body2" Class="pa-4">No racks yet.</MudText>
+        </NoRecordsContent>
+    </MudTable>
+
+    <MudDivider Class="my-3" />
+
+    <MudText Typo="Typo.h6">Rack Assignments</MudText>
+
+    @foreach (var rack in racks)
+    {
+        <MudStack Spacing="1" Class="mb-3">
+            <MudText Typo="Typo.subtitle1">
+                @rack.Name
+                @if (!string.IsNullOrWhiteSpace(rack.LocationRef?.Name))
+                {
+                    <span class="ml-1">(@rack.LocationRef.Name)</span>
+                }
+                <span class="ml-1">[@(rack.RackUnits?.ToString() ?? "Default")U]</span>
+            </MudText>
+            @if (!string.IsNullOrWhiteSpace(rack.Description))
+            {
+                <MudText Typo="Typo.caption">@rack.Description</MudText>
+            }
+
+            @if (!devicesByRack.TryGetValue(rack.Id, out var list) || list.Count == 0)
+            {
+                <MudText Typo="Typo.body2">No devices assigned.</MudText>
+            }
+            else
+            {
+                var placed = list.Where(d => d.RackUPosition is not null && d.RackUSize is not null).ToList();
+                var unplacedInRack = list.Where(d => d.RackUPosition is null || d.RackUSize is null).ToList();
+                var rows = BuildRackRows(placed);
+
+                <div class="rack-table">
+                    <div class="rack-header">
+                        <div class="rack-cell u-cell">U</div>
+                        <div class="rack-cell">Device</div>
+                        <div class="rack-cell">Type</div>
+                        <div class="rack-cell">IP</div>
+                        <div class="rack-cell">Manufacturer</div>
+                        <div class="rack-cell">Model</div>
+                        <div class="rack-cell" style="width:72px;"></div>
+                    </div>
+
+                    @foreach (var row in rows)
+                    {
+                        <div class="rack-row @(row.IsCovered ? "covered" : "")">
+                            <div class="rack-cell u-cell">@($"U{row.U}")</div>
+
+                            @if (row.Device is not null)
+                            {
+                                <div class="rack-cell device-cell @(row.IsOverlap ? "overlap" : "")" style="@($"grid-row: span {row.RowSpan};")">
+                                    <div class="device-name">
+                                        <MudTooltip Text="@GetStatusTooltip(row.Device)">
+                                            <MudIcon Icon="@Icons.Material.Filled.Circle"
+                                                     Color="@GetStatusColor(row.Device)"
+                                                     Size="Size.Small"
+                                                     Style="font-size:12px;" />
+                                        </MudTooltip>
+                                        @if (TryBuildAccessLink(row.Device.AccessLink, out var href))
+                                        {
+                                            <MudLink Href="@href"
+                                                     Target="_blank"
+                                                     Rel="noopener noreferrer"
+                                                     Underline="Underline.Always"
+                                                     Style="font-size:inherit; font-weight:600">
+                                                @row.Device.Name
+                                            </MudLink>
+                                        }
+                                        else
+                                        {
+                                            @row.Device.Name
+                                        }
+                                        <span class="u-size">@($"{row.RowSpan}U")</span>
+                                    </div>
+                                </div>
+                                <div class="rack-cell device-cell @(row.IsOverlap ? "overlap" : "")" style="@($"grid-row: span {row.RowSpan};")">@row.Device.ClientType?.Name</div>
+                                <div class="rack-cell device-cell @(row.IsOverlap ? "overlap" : "")" style="@($"grid-row: span {row.RowSpan};")">@row.Device.IpAddress</div>
+                                <div class="rack-cell device-cell @(row.IsOverlap ? "overlap" : "")" style="@($"grid-row: span {row.RowSpan};")">@row.Device.Manufacturer</div>
+                                <div class="rack-cell device-cell @(row.IsOverlap ? "overlap" : "")" style="@($"grid-row: span {row.RowSpan};")">@row.Device.Model</div>
+                                <div class="rack-cell device-cell @(row.IsOverlap ? "overlap" : "")" style="@($"grid-row: span {row.RowSpan};")">
+                                    @if (_canEdit)
+                                    {
+                                        <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                                       Color="Color.Info"
+                                                       Size="Size.Small"
+                                                       Title="Edit"
+                                                       OnClick="@(() => OpenEditDeviceDialog(row.Device))" />
+                                        <MudIconButton Icon="@Icons.Material.Filled.LinkOff"
+                                                       Color="Color.Warning"
+                                                       Size="Size.Small"
+                                                       Title="Remove from rack"
+                                                       OnClick="@(() => ConfirmUnassignFromRack(row.Device))" />
+                                    }
+                                </div>
+                            }
+                            else if (row.IsCovered)
+                            {
+                                <div class="rack-cell covered-cell">
+                                    <span class="u-continued">↗</span>
+                                </div>
+                                <div class="rack-cell covered-cell"></div>
+                                <div class="rack-cell covered-cell"></div>
+                                <div class="rack-cell covered-cell"></div>
+                                <div class="rack-cell covered-cell"></div>
+                                <div class="rack-cell covered-cell"></div>
+                            }
+                            else
+                            {
+                                <div class="rack-cell"></div>
+                                <div class="rack-cell"></div>
+                                <div class="rack-cell"></div>
+                                <div class="rack-cell"></div>
+                                <div class="rack-cell"></div>
+                                <div class="rack-cell"></div>
+                            }
+                        </div>
+                    }
+
+                </div>
+
+                @if (unplacedInRack.Count > 0)
+                {
+                    <MudText Typo="Typo.caption" Class="mt-2">
+                        Missing U position/size:
+                        @string.Join(", ", unplacedInRack.Select(d => d.Name))
+                    </MudText>
+                }
+    }
+</MudStack>
+
+<style>
+    .download-icon-btn {
+        height: 26px;
+        width: 26px;
+        padding: 0;
+    }
+
+    .add-icon {
+        margin-right: 20px;
+    }
+</style>
+
+<style>
+    .rack-table {
+        display: grid;
+        grid-auto-rows: 26px;
+        border: 1px solid rgba(0,0,0,0.12);
+        border-radius: 6px;
+        overflow: hidden;
+    }
+
+    .rack-header,
+    .rack-row {
+        display: grid;
+        grid-template-columns: 60px 1.5fr 1fr 1fr 1fr 1fr 72px;
+    }
+
+    .rack-header {
+        background: rgba(0,0,0,0.04);
+        font-weight: 600;
+    }
+
+    .rack-row {
+        border-top: 1px dashed rgba(0,0,0,0.1);
+    }
+
+    .rack-cell {
+        padding: 4px 8px;
+        display: flex;
+        align-items: center;
+        border-right: 1px solid rgba(0,0,0,0.06);
+        min-height: 26px;
+    }
+
+
+    .covered-cell {
+        background: transparent;
+    }
+
+    .u-continued {
+        font-size: 0.85rem;
+        color: var(--mud-palette-text-secondary);
+    }
+
+    .rack-cell:last-child {
+        border-right: none;
+    }
+
+    .u-cell {
+        justify-content: flex-end;
+        color: var(--mud-palette-text-secondary);
+        font-size: 0.8rem;
+    }
+
+    .device-name {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+
+    .device-cell.overlap,
+    .rack-cell.overlap {
+        background: rgba(198, 40, 40, 0.12);
+        border-color: rgba(198, 40, 40, 0.35);
+    }
+
+    .u-size {
+        font-size: 0.75rem;
+        color: var(--mud-palette-text-secondary);
+    }
+</style>
+    }
+
+</MudStack>
+
+@code {
+    private const int DefaultRackUnits = 42;
+    private List<Rack> racks = new();
+    private Dictionary<int, List<Device>> devicesByRack = new();
+    private bool _canEdit = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        _canEdit = !authState.User.IsInRole("Viewer");
+
+        await Reload();
+    }
+
+    private async Task Reload()
+    {
+        racks = await DbContext.Racks
+            .AsNoTracking()
+            .Include(r => r.LocationRef)
+            .OrderBy(r => r.Name)
+            .ToListAsync();
+
+        var devices = await DbContext.Devices
+            .AsNoTracking()
+            .Include(d => d.ClientType)
+            .Where(d => d.RackId != null)
+            .OrderBy(d => d.Name)
+            .ToListAsync();
+
+        devicesByRack = devices
+            .GroupBy(d => d.RackId!.Value)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+    }
+
+    private async Task OpenAdd()
+    {
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = DialogService.Show<AddRackDialog>("Add Rack", options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+            await Reload();
+    }
+
+    private async Task OpenEdit(int id)
+    {
+        var parameters = new DialogParameters { ["RackId"] = id };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = DialogService.Show<EditRackDialog>("Edit Rack", parameters, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+            await Reload();
+    }
+
+    private async Task ConfirmDelete(int id)
+    {
+        var inUse = await DbContext.Devices.AsNoTracking().AnyAsync(d => d.RackId == id);
+        if (inUse)
+        {
+            Snackbar.Add("Cannot delete: this rack is assigned to one or more devices.", Severity.Warning);
+            return;
+        }
+
+        var confirm = await DialogService.ShowMessageBox(
+            title: "Delete rack?",
+            message: "Are you sure you want to delete this rack?",
+            yesText: "Delete",
+            cancelText: "Cancel");
+
+        if (confirm != true)
+            return;
+
+        var entity = await DbContext.Racks.FirstOrDefaultAsync(r => r.Id == id);
+        if (entity is null)
+            return;
+
+        DbContext.Racks.Remove(entity);
+        await DbContext.SaveChangesAsync();
+
+        Snackbar.Add("Rack deleted.", Severity.Success);
+        await Reload();
+    }
+
+    private static List<RackRow> BuildRackRows(List<Device> devices)
+    {
+        if (devices.Count == 0)
+            return new List<RackRow>();
+
+        var startMap = devices
+            .Where(d => d.RackUPosition is not null && d.RackUSize is not null)
+            .GroupBy(d => d.RackUPosition!.Value)
+            .ToDictionary(g => g.Key, g => g.ToList());
+
+        var covered = new HashSet<int>();
+        foreach (var d in devices)
+        {
+            var start = d.RackUPosition!.Value;
+            var size = Math.Max(1, d.RackUSize!.Value);
+            for (int u = start + 1; u < start + size; u++)
+                covered.Add(u);
+        }
+
+        var maxU = devices.Max(d => d.RackUPosition!.Value + Math.Max(1, d.RackUSize!.Value) - 1);
+        var rows = new List<RackRow>();
+
+        for (int u = maxU; u >= 1; u--)
+        {
+            if (startMap.TryGetValue(u, out var startList) && startList.Count > 0)
+            {
+                var d = startList[0];
+                var size = Math.Max(1, d.RackUSize ?? 1);
+                var isOverlap = startList.Count > 1 ||
+                                Enumerable.Range(d.RackUPosition!.Value, size)
+                                    .Any(pos => covered.Contains(pos) && devices.Count(x =>
+                                        x.RackUPosition is not null &&
+                                        x.RackUSize is not null &&
+                                        pos >= x.RackUPosition!.Value &&
+                                        pos < x.RackUPosition!.Value + Math.Max(1, x.RackUSize!.Value)) > 1);
+                rows.Add(new RackRow
+                {
+                    U = u,
+                    Device = d,
+                    RowSpan = size,
+                    IsCovered = false,
+                    IsOverlap = isOverlap
+                });
+            }
+            else
+            {
+                rows.Add(new RackRow
+                {
+                    U = u,
+                    Device = null,
+                    RowSpan = 1,
+                    IsCovered = covered.Contains(u)
+                });
+            }
+        }
+
+        return rows;
+    }
+
+    private async Task OpenEditDeviceDialog(Device device)
+    {
+        var isDevice = device.ClientType?.IsDevice == true;
+        var title = isDevice ? "Edit Device" : "Edit Client";
+
+        var parameters = new DialogParameters { ["DeviceId"] = device.Id };
+        var dialog = DialogService.ShowStandard<EditDeviceDialog>(title, parameters);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+            await Reload();
+    }
+
+    private async Task ConfirmUnassignFromRack(Device device)
+    {
+        var confirm = await DialogService.ShowMessageBox(
+            title: "Remove from rack?",
+            message: $"Remove '{device.Name}' from its rack assignment?",
+            yesText: "Remove",
+            cancelText: "Cancel");
+
+        if (confirm != true)
+            return;
+
+        var tracked = await DbContext.Devices.FirstOrDefaultAsync(d => d.Id == device.Id);
+        if (tracked is null)
+            return;
+
+        tracked.RackId = null;
+        tracked.RackUPosition = null;
+        tracked.RackUSize = null;
+
+        await DbContext.SaveChangesAsync();
+        Snackbar.Add($"Removed '{device.Name}' from its rack.", Severity.Success);
+        await Reload();
+    }
+
+    private sealed class RackRow
+    {
+        public int U { get; set; }
+        public Device? Device { get; set; }
+        public int RowSpan { get; set; }
+        public bool IsCovered { get; set; }
+        public bool IsOverlap { get; set; }
+    }
+
+    private int GetUsedUnits(int rackId)
+    {
+        if (!devicesByRack.TryGetValue(rackId, out var list))
+            return 0;
+
+        return list
+            .Where(d => d.RackUPosition is not null && d.RackUSize is not null)
+            .Sum(d => Math.Max(1, d.RackUSize!.Value));
+    }
+
+    private int GetFreeUnits(int rackId)
+    {
+        var rack = racks.FirstOrDefault(r => r.Id == rackId);
+        var total = rack?.RackUnits ?? DefaultRackUnits;
+        var used = GetUsedUnits(rackId);
+        return Math.Max(0, total - used);
+    }
+
+    private static string GetStatusTooltip(Device d)
+        => d.IsStatusTracked ? (d.IsOnline ? "Online" : "Offline") : "Not Tracked";
+
+    private static Color GetStatusColor(Device d)
+        => d.IsStatusTracked ? (d.IsOnline ? Color.Success : Color.Error) : Color.Default;
+}

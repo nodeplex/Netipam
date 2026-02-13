@@ -1,0 +1,99 @@
+@page "/setup"
+@layout Layout.AuthLayout
+@attribute [AllowAnonymous]
+@rendermode InteractiveServer
+
+@using Microsoft.AspNetCore.Components
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.EntityFrameworkCore
+@using MudBlazor
+@using Netipam.Data
+
+@inject AppDbContext DbContext
+@inject NavigationManager Nav
+
+<MudContainer MaxWidth="MaxWidth.ExtraSmall" Class="mt-10">
+    <MudPaper Elevation="3" Class="pa-6">
+        <MudStack Spacing="2">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                <MudIcon Icon="@Icons.Material.Filled.Build" Color="Color.Primary" />
+                <MudText Typo="Typo.h5">Create Admin</MudText>
+            </MudStack>
+            <MudText Typo="Typo.caption">
+                First-time setup. Create the initial admin account.
+            </MudText>
+
+            @if (_hasUsers)
+            {
+                <MudAlert Severity="Severity.Info" Dense="true">
+                    An admin account already exists. Please sign in.
+                </MudAlert>
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="@(() => Nav.NavigateTo("/login"))">
+                    Go to Login
+                </MudButton>
+            }
+            else
+            {
+                <form method="post" action="/auth/setup">
+                    <MudTextField T="string"
+                                  Label="Username"
+                                  Name="username"
+                                  Immediate="true"
+                                  FullWidth="true"
+                                  AutoFocus="true"
+                                  Adornment="Adornment.Start"
+                                  AdornmentIcon="@Icons.Material.Filled.Person" />
+
+                    <MudTextField T="string"
+                                  Label="Password"
+                                  Name="password"
+                                  InputType="InputType.Password"
+                                  Immediate="true"
+                                  FullWidth="true"
+                                  Class="mt-3"
+                                  Adornment="Adornment.Start"
+                                  AdornmentIcon="@Icons.Material.Filled.Lock" />
+
+                    <MudTextField T="string"
+                                  Label="Confirm Password"
+                                  Name="confirmPassword"
+                                  InputType="InputType.Password"
+                                  Immediate="true"
+                                  FullWidth="true"
+                                  Class="mt-3"
+                                  Adornment="Adornment.Start"
+                                  AdornmentIcon="@Icons.Material.Filled.Lock" />
+
+                    <MudStack Row="true" Spacing="2" Class="mt-4">
+                        <MudButton Variant="Variant.Filled"
+                                   Color="Color.Primary"
+                                   ButtonType="ButtonType.Submit">
+                            Create Admin
+                        </MudButton>
+                    </MudStack>
+
+                    @if (ShowError)
+                    {
+                        <MudAlert Severity="Severity.Error" Dense="true" Class="mt-4">
+                            @Error
+                        </MudAlert>
+                    }
+                </form>
+            }
+        </MudStack>
+    </MudPaper>
+</MudContainer>
+
+@code {
+    private bool _hasUsers;
+
+    [SupplyParameterFromQuery(Name = "error")]
+    public string? Error { get; set; }
+
+    private bool ShowError => !string.IsNullOrWhiteSpace(Error);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _hasUsers = await DbContext.Users.AnyAsync();
+    }
+}

@@ -1,0 +1,33 @@
+﻿@rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+
+<CascadingAuthenticationState>
+    <Router AppAssembly="typeof(Program).Assembly" NotFoundPage="typeof(Pages.NotFound)">
+        <Found Context="routeData">
+
+            @if (IsAllowAnonymous(routeData.PageType))
+            {
+                <RouteView RouteData="routeData" DefaultLayout="typeof(Layout.AuthLayout)" />
+            }
+            else
+            {
+                <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)">
+                    <NotAuthorized>
+                        <RedirectToLogin />
+                    </NotAuthorized>
+                    <Authorizing>
+                        <div class="pa-4">Authorizing...</div>
+                    </Authorizing>
+                </AuthorizeRouteView>
+            }
+
+            <FocusOnNavigate RouteData="routeData" Selector="h1" />
+        </Found>
+    </Router>
+</CascadingAuthenticationState>
+
+@code {
+    private static bool IsAllowAnonymous(Type pageType)
+        => Attribute.IsDefined(pageType, typeof(AllowAnonymousAttribute), inherit: true);
+}

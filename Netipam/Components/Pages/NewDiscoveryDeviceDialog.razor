@@ -1,0 +1,59 @@
+@using MudBlazor
+@using MudBlazor.Services
+@using Netipam.Data
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="2">
+            <MudText Typo="Typo.subtitle1">Review discovered device</MudText>
+
+            <MudTextField T="string" Label="Name" Immediate="true" @bind-Value="model.Name" />
+            <MudTextField T="string" Label="Hostname" Immediate="true" @bind-Value="model.Hostname" />
+
+            <MudTextField T="string" Label="MAC address" Value="@model.MacAddress" Disabled="true" />
+            <MudTextField T="string" Label="IP address" Value="@model.IpAddress" Disabled="true" />
+
+            <MudTextField T="string" Label="Upstream device" Immediate="true" @bind-Value="model.UpstreamDeviceName" />
+            <MudTextField T="string" Label="Upstream connection" Immediate="true" @bind-Value="model.UpstreamConnection" />
+        </MudStack>
+    </DialogContent>
+    <DialogActions>
+        <MudButton Variant="Variant.Text" OnClick="Cancel">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Save">Add</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance Dialog { get; set; } = default!;
+    [Parameter] public ClientDiscoveryAlert Alert { get; set; } = new();
+
+    private Device model = new();
+
+    protected override void OnInitialized()
+    {
+        model = new Device
+        {
+            Name = Alert.Name ?? Alert.Mac,
+            Hostname = Alert.Hostname,
+            MacAddress = Alert.Mac,
+            IpAddress = Alert.IpAddress,
+            ConnectionType = Alert.ConnectionType,
+            ConnectionDetail = Alert.ConnectionDetail,
+            UpstreamDeviceName = Alert.UpstreamDeviceName,
+            UpstreamDeviceMac = Alert.UpstreamDeviceMac,
+            UpstreamConnection = Alert.UpstreamConnection,
+            IsOnline = Alert.IsOnline
+        };
+    }
+
+    private void Save()
+    {
+        model.Name = string.IsNullOrWhiteSpace(model.Name) ? Alert.Mac : model.Name.Trim();
+        model.Hostname = model.Hostname?.Trim();
+        model.UpstreamDeviceName = model.UpstreamDeviceName?.Trim();
+        model.UpstreamConnection = model.UpstreamConnection?.Trim();
+        Dialog.Close(DialogResult.Ok(model));
+    }
+
+    private void Cancel() => Dialog.Cancel();
+}

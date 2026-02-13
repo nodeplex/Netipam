@@ -1,0 +1,49 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+
+@using MudBlazor
+@using Netipam.Services
+@using Netipam.Data
+
+@inject AppSettingsService SettingsService
+
+<MudThemeProvider Theme="@_currentTheme" IsDarkMode="@_isDarkMode" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+<MudLayout>
+    <MudMainContent Class="pa-4">
+        @Body
+    </MudMainContent>
+</MudLayout>
+
+@code {
+    private bool _isDarkMode;
+    private MudTheme _currentTheme = new MudTheme();
+
+    protected override async Task OnInitializedAsync()
+    {
+        SettingsService.SettingsChanged += OnSettingsChanged;
+
+        var settings = await SettingsService.LoadAsync();
+        ApplySettings(settings);
+    }
+
+    private void OnSettingsChanged(AppSetting s)
+    {
+        ApplySettings(s);
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void ApplySettings(AppSetting s)
+    {
+        _isDarkMode = s.DarkMode;
+        _currentTheme = MainLayout.ResolveTheme(s.ThemeName);
+    }
+
+    public void Dispose()
+    {
+        SettingsService.SettingsChanged -= OnSettingsChanged;
+    }
+}

@@ -1,0 +1,474 @@
+@page "/devices/{DeviceId:int}/history"
+@rendermode InteractiveServer
+
+@using Microsoft.EntityFrameworkCore
+@using MudBlazor
+@using Netipam.Data
+
+@inject AppDbContext DbContext
+@inject NavigationManager Nav
+
+<MudStack Spacing="2">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                       Title="Back"
+                       OnClick="GoBack" />
+        <MudText Typo="Typo.h5">Device History</MudText>
+    </MudStack>
+
+    @if (loading)
+    {
+        <MudProgressLinear Indeterminate="true" />
+    }
+    else if (device is null)
+    {
+        <MudAlert Severity="Severity.Error">Device not found.</MudAlert>
+    }
+    else
+    {
+        <MudText Typo="Typo.subtitle1">@device.Name</MudText>
+        <MudText Typo="Typo.caption">@device.ClientType?.Name</MudText>
+
+
+
+        <MudPaper Class="pa-2">
+            <MudText Typo="Typo.subtitle2">Daily Uptime (Last 30 Days)</MudText>
+
+            @if (dailyRows.Count == 0)
+            {
+                <MudText Typo="Typo.body2" Class="mt-2">No data yet.</MudText>
+            }
+            else
+            {
+                @if (dailyRows.Count < 2)
+                {
+                    <MudText Typo="Typo.body2" Class="mt-2 mb-8">Chart will appear after at least 2 days of history.</MudText>
+                }
+                else
+                {
+                    <MudChart ChartType="ChartType.Line"
+                              XAxisLabels="@chartLabels"
+                              Class="mt-2 device-history-chart"
+                              Height="300px"
+                              ChartOptions="chartOptions"
+                              ChartSeries="@chartDatasets" />
+                }
+
+                <MudTable Dense="true"
+                          Hover="true"
+                          Bordered="true"
+                          Striped="true"
+                          Items="@dailyRows">
+                    <HeaderContent>
+                        <MudTh style="width:32px;"></MudTh>
+                        <MudTh>Date</MudTh>
+                        <MudTh>Online</MudTh>
+                        <MudTh>Offline</MudTh>
+                        <MudTh style="width:120px;">Uptime %</MudTh>
+                    </HeaderContent>
+                    <RowTemplate Context="r">
+                        <MudTd DataLabel="">
+                            <MudIconButton Icon="@(IsExpanded(r.Date) ? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                                           Size="Size.Small"
+                                           Color="Color.Default"
+                                           OnClick="@(() => ToggleDay(r.Date))" />
+                        </MudTd>
+                        <MudTd DataLabel="Date">@r.Date.ToString("MM-dd-yyyy")</MudTd>
+                        <MudTd DataLabel="Online">@FormatDuration(r.OnlineSeconds)</MudTd>
+                        <MudTd DataLabel="Offline">@FormatDuration(r.OfflineSeconds)</MudTd>
+                        <MudTd DataLabel="Percent">@($"{r.Percent:0.0}%")</MudTd>
+                    </RowTemplate>
+                    <ChildRowContent Context="r">
+                        @if (IsExpanded(r.Date))
+                        {
+                            <MudTd ColSpan="5" Class="pa-2">
+                                @RenderTimeline(r.Date)
+                            </MudTd>
+                        }
+                    </ChildRowContent>
+                </MudTable>
+            }
+        </MudPaper>
+
+        <MudPaper Class="pa-2">
+            <MudText Typo="Typo.subtitle2">Status Events (Last 30 Days)</MudText>
+            @if (events.Count == 0)
+            {
+                <MudText Typo="Typo.body2" Class="mt-2">No status changes recorded.</MudText>
+            }
+            else
+            {
+                <MudTable Dense="true"
+                          Hover="true"
+                          Bordered="true"
+                          Striped="true"
+                          Items="@events">
+                    <HeaderContent>
+                        <MudTh>Time</MudTh>
+                        <MudTh>Status</MudTh>
+                        <MudTh>Source</MudTh>
+                    </HeaderContent>
+                    <RowTemplate Context="e">
+                        <MudTd DataLabel="Time">@e.ChangedAtUtc.ToLocalTime().ToString("MM-dd-yyyy HH:mm")</MudTd>
+                        <MudTd DataLabel="Status">@(e.IsOnline ? "Online" : "Offline")</MudTd>
+                        <MudTd DataLabel="Source">@e.Source</MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+        </MudPaper>
+
+        <MudPaper Class="pa-2">
+            <MudText Typo="Typo.subtitle2">IP History</MudText>
+            @if (ipHistory.Count == 0)
+            {
+                <MudText Typo="Typo.body2" Class="mt-2">No IP history recorded.</MudText>
+            }
+            else
+            {
+                <MudTable Dense="true"
+                          Hover="true"
+                          Bordered="true"
+                          Striped="true"
+                          Items="@ipHistory">
+                    <HeaderContent>
+                        <MudTh>IP</MudTh>
+                        <MudTh>First Seen</MudTh>
+                        <MudTh>Last Seen</MudTh>
+                        <MudTh>Source</MudTh>
+                    </HeaderContent>
+                    <RowTemplate Context="h">
+                        <MudTd DataLabel="IP">@FormatIpHistory(h)</MudTd>
+                        <MudTd DataLabel="First Seen">@FormatUtc(h.FirstSeenUtc)</MudTd>
+                        <MudTd DataLabel="Last Seen">@(h.LastSeenUtc is null ? "Current" : FormatUtc(h.LastSeenUtc.Value))</MudTd>
+                        <MudTd DataLabel="Source">@h.Source</MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+        </MudPaper>
+    }
+</MudStack>
+
+<style>
+    .device-history-chart text {
+        font-size: 12px;
+    }
+
+    .day-timeline {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .timeline-bar {
+        display: flex;
+        height: 12px;
+        border-radius: 6px;
+        overflow: hidden;
+        border: 1px solid rgba(0,0,0,0.12);
+    }
+
+    .timeline-seg {
+        height: 100%;
+    }
+
+    .seg-online {
+        background-color: #43a047;
+    }
+
+    .seg-offline {
+        background-color: #e53935;
+    }
+
+    .seg-unknown {
+        background-color: #9e9e9e;
+    }
+
+    .timeline-hours {
+        display: grid;
+        grid-template-columns: repeat(24, 1fr);
+        font-size: 0.65rem;
+        color: var(--mud-palette-text-secondary);
+        margin-top: 2px;
+    }
+
+    .timeline-hours span {
+        text-align: left;
+        position: relative;
+    }
+
+    .timeline-hours span::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: -4px;
+        height: 4px;
+        border-left: 1px solid rgba(0,0,0,0.2);
+    }
+</style>
+
+@code {
+    [Parameter] public int DeviceId { get; set; }
+
+    private bool loading = true;
+    private Device? device;
+    private readonly List<DailyRow> dailyRows = new();
+    private readonly List<DeviceStatusEvent> events = new();
+    private readonly List<DeviceIpHistory> ipHistory = new();
+    private readonly Dictionary<DateOnly, List<TimelineSegment>> daySegments = new();
+    private readonly HashSet<DateOnly> expandedDays = new();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        loading = true;
+        dailyRows.Clear();
+        events.Clear();
+        ipHistory.Clear();
+
+        device = await DbContext.Devices
+            .AsNoTracking()
+            .Include(d => d.ClientType)
+            .FirstOrDefaultAsync(d => d.Id == DeviceId);
+
+        if (device is null)
+        {
+            loading = false;
+            return;
+        }
+
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        var startDate = today.AddDays(-29);
+
+        var rollups = await DbContext.DeviceStatusDaily
+            .AsNoTracking()
+            .Where(r => r.DeviceId == DeviceId && r.Date >= startDate && r.Date <= today)
+            .OrderBy(r => r.Date)
+            .ToListAsync();
+
+        foreach (var r in rollups)
+        {
+            var observed = Math.Max(r.ObservedSeconds, r.OnlineSeconds);
+            dailyRows.Add(new DailyRow
+            {
+                Date = r.Date,
+                OnlineSeconds = r.OnlineSeconds,
+                ObservedSeconds = observed,
+                OfflineSeconds = Math.Max(0, observed - r.OnlineSeconds),
+                Percent = observed <= 0 ? 0 : Math.Min(100, r.OnlineSeconds * 100.0 / observed)
+            });
+        }
+
+        BuildChart();
+
+        var tz = TimeZoneInfo.Local;
+        var timelineStartLocal = startDate.ToDateTime(TimeOnly.MinValue);
+        var timelineEndLocal = today.AddDays(1).ToDateTime(TimeOnly.MinValue);
+        var timelineStartUtc = TimeZoneInfo.ConvertTimeToUtc(timelineStartLocal, tz).AddDays(-1);
+        var timelineEndUtc = TimeZoneInfo.ConvertTimeToUtc(timelineEndLocal, tz);
+
+        var timelineEvents = await DbContext.DeviceStatusEvents
+            .AsNoTracking()
+            .Where(e => e.DeviceId == DeviceId && e.ChangedAtUtc >= timelineStartUtc && e.ChangedAtUtc < timelineEndUtc)
+            .OrderBy(e => e.ChangedAtUtc)
+            .ToListAsync();
+
+        var defaultStatus = device.IsStatusTracked ? device.IsOnline : (bool?)null;
+        BuildDayTimelines(startDate, today, timelineEvents, defaultStatus);
+
+        var eventCutoff = DateTime.UtcNow.AddDays(-30);
+        events.AddRange(await DbContext.DeviceStatusEvents
+            .AsNoTracking()
+            .Where(e => e.DeviceId == DeviceId && e.ChangedAtUtc >= eventCutoff)
+            .OrderByDescending(e => e.ChangedAtUtc)
+            .ToListAsync());
+
+        ipHistory.AddRange(await DbContext.DeviceIpHistories
+            .AsNoTracking()
+            .Where(h => h.DeviceId == DeviceId)
+            .OrderByDescending(h => h.FirstSeenUtc)
+            .ToListAsync());
+
+        loading = false;
+    }
+
+    private void GoBack()
+    {
+        var backUrl = device?.ClientType?.IsDevice == true ? "/devices" : "/clients";
+        Nav.NavigateTo(backUrl);
+    }
+
+    private static string FormatDuration(int seconds)
+    {
+        var totalMinutes = seconds / 60;
+        var hours = totalMinutes / 60;
+        var minutes = totalMinutes % 60;
+        return $"{hours}h {minutes}m";
+    }
+
+    private static string FormatIpHistory(DeviceIpHistory h)
+        => h.Port is null ? h.IpAddress : $"{h.IpAddress}:{h.Port}";
+
+    private static string FormatUtc(DateTime utc)
+        => DateTime.SpecifyKind(utc, DateTimeKind.Utc).ToLocalTime().ToString("MM-dd-yyyy HH:mm");
+
+    private string[] chartLabels = Array.Empty<string>();
+    private List<ChartSeries> chartDatasets = new();
+    private ChartOptions chartOptions = new()
+    {
+        YAxisTicks = 5,
+        ShowLegend = false,
+        LineStrokeWidth = 3,
+        ChartPalette = new[] { "#1e88e5" }
+    };
+
+    private void BuildChart()
+    {
+        chartLabels = dailyRows.Select(r => r.Date.ToString("MM-dd")).ToArray();
+        var data = dailyRows.Select(r => r.Percent).ToArray();
+
+        chartDatasets = new List<ChartSeries>
+        {
+            new()
+            {
+                Name = "Uptime %",
+                Data = data
+            }
+        };
+    }
+
+    private void ToggleDay(DateOnly date)
+    {
+        if (!expandedDays.Add(date))
+            expandedDays.Remove(date);
+    }
+
+    private bool IsExpanded(DateOnly date) => expandedDays.Contains(date);
+
+    private RenderFragment RenderTimeline(DateOnly date) => @<div class="day-timeline">
+        <div class="timeline-bar">
+            @foreach (var seg in GetSegments(date))
+            {
+                <div class="timeline-seg @SegmentClass(seg.Kind)" style="width:@($"{seg.WidthPercent:0.###}%")"></div>
+            }
+        </div>
+        <div class="timeline-hours">
+            @for (var h = 0; h < 24; h++)
+            {
+                <span>@h.ToString("00")</span>
+            }
+        </div>
+    </div>;
+
+    private IEnumerable<TimelineSegment> GetSegments(DateOnly date)
+        => daySegments.TryGetValue(date, out var segs) ? segs : Array.Empty<TimelineSegment>();
+
+    private static string SegmentClass(TimelineKind kind) => kind switch
+    {
+        TimelineKind.Online => "seg-online",
+        TimelineKind.Offline => "seg-offline",
+        _ => "seg-unknown"
+    };
+
+    private static void AddSegment(
+        List<TimelineSegment> segments,
+        DateTime start,
+        DateTime end,
+        bool? status)
+    {
+        if (end <= start)
+            return;
+
+        var minutes = (int)Math.Round((end - start).TotalMinutes);
+        if (minutes <= 0)
+            return;
+
+        var kind = status is null
+            ? TimelineKind.Unknown
+            : status.Value ? TimelineKind.Online : TimelineKind.Offline;
+
+        var widthPercent = minutes * 100.0 / (24 * 60);
+        segments.Add(new TimelineSegment(minutes, widthPercent, kind));
+    }
+
+    private void BuildDayTimelines(
+        DateOnly start,
+        DateOnly end,
+        List<DeviceStatusEvent> timelineEvents,
+        bool? defaultStatus)
+    {
+        daySegments.Clear();
+        var tz = TimeZoneInfo.Local;
+        var nowLocal = DateTime.Now;
+        var points = timelineEvents
+            .Select(e => new EventPoint(TimeZoneInfo.ConvertTimeFromUtc(e.ChangedAtUtc, tz), e.IsOnline))
+            .OrderBy(e => e.Local)
+            .ToList();
+
+        var index = 0;
+        bool? current = null;
+
+        for (var date = start; date <= end; date = date.AddDays(1))
+        {
+            var dayStart = date.ToDateTime(TimeOnly.MinValue);
+            var dayEnd = dayStart.AddDays(1);
+
+            while (index < points.Count && points[index].Local < dayStart)
+            {
+                current = points[index].IsOnline;
+                index++;
+            }
+
+            if (current is null)
+                current = defaultStatus;
+
+            var segments = new List<TimelineSegment>();
+            var cursor = dayStart;
+            var cutoff = date == DateOnly.FromDateTime(nowLocal) ? nowLocal : dayEnd;
+            if (cutoff < dayStart)
+                cutoff = dayStart;
+            if (cutoff > dayEnd)
+                cutoff = dayEnd;
+
+            while (index < points.Count && points[index].Local < dayEnd)
+            {
+                var evtTime = points[index].Local;
+                if (evtTime > cutoff)
+                    break;
+                AddSegment(segments, cursor, evtTime, current);
+                current = points[index].IsOnline;
+                cursor = evtTime;
+                index++;
+            }
+
+            AddSegment(segments, cursor, cutoff, current);
+            if (cutoff < dayEnd)
+            {
+                AddSegment(segments, cutoff, dayEnd, null);
+            }
+            daySegments[date] = segments;
+        }
+    }
+
+    private sealed class DailyRow
+    {
+        public DateOnly Date { get; set; }
+        public int OnlineSeconds { get; set; }
+        public int ObservedSeconds { get; set; }
+        public int OfflineSeconds { get; set; }
+        public double Percent { get; set; }
+    }
+
+    private sealed record EventPoint(DateTime Local, bool IsOnline);
+
+    private enum TimelineKind
+    {
+        Online,
+        Offline,
+        Unknown
+    }
+
+    private sealed record TimelineSegment(
+        int Minutes,
+        double WidthPercent,
+        TimelineKind Kind);
+
+}

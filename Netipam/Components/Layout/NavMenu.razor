@@ -1,0 +1,126 @@
+﻿@using MudBlazor
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Reflection
+
+@inject AuthenticationStateProvider AuthStateProvider
+
+<MudStack Style="height:100%;"
+          Class="pa-1"
+          Spacing="0">
+
+    <!-- Top: normal navigation -->
+    <MudNavMenu Dense="true" Style="flex:1; min-height:75%; overflow:auto;">
+
+        <MudNavLink Href="/" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Dashboard" Title="Dashboard">
+            Dashboard
+        </MudNavLink>
+
+        <MudNavLink Href="/access-panel" Icon="@Icons.Material.Filled.Apps" Title="Access Panel">
+            Access Panel
+        </MudNavLink>
+
+        <MudNavLink Href="/devices" Icon="@Icons.Material.Filled.Storage" Title="Devices">
+            Devices
+        </MudNavLink>
+
+        <MudNavLink Href="/clients" Icon="@Icons.Material.Filled.People" Title="Clients">
+            Clients
+        </MudNavLink>
+
+        <MudNavLink Href="/racks/view" Icon="@Icons.Material.Filled.ViewInAr" Title="Rack View">
+            Rack View
+        </MudNavLink>
+
+        <MudNavLink Href="/subnets" Icon="@Icons.Material.Filled.Lan" Title="Subnets">
+            Subnets
+        </MudNavLink>
+
+        <MudNavLink Href="/hosts" Icon="@Icons.Material.Filled.DeviceHub" Title="Hosts & Guests">
+            Hosts & Guests
+        </MudNavLink>
+
+        <MudNavLink Href="/topology" Icon="@Icons.Material.Filled.AccountTree" Title="Network Topology">
+            Network Topology
+        </MudNavLink>
+        
+        @if (_canImport)
+        {
+            <MudNavLink Href="/unifi-import" Icon="@Icons.Material.Filled.CloudDownload" Title="Import">
+                Import
+            </MudNavLink>
+        }
+
+        <MudNavLink Href="/logs" Icon="@Icons.Material.Filled.History" Title="Updater Logs">
+            Updater Logs
+        </MudNavLink>
+
+        <MudNavLink Href="/ip-history" Icon="@Icons.Material.Filled.ManageSearch" Title="IP History">
+            IP History
+        </MudNavLink>
+
+        <MudNavLink Href="/about" Icon="@Icons.Material.Filled.Info" Title="About">
+            About
+        </MudNavLink>
+       
+       
+
+    </MudNavMenu>
+
+    <!-- Bottom: auth (never overflows / always fits) -->
+    <MudDivider Class="my-1" />
+
+    <AuthorizeView>
+        <Authorized Context="auth">
+            <MudStack Spacing="0" Class="px-1 pb-1" Style="min-width:0;">
+                <MudText Typo="Typo.caption"
+                         Style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                    @auth.User.Identity?.Name
+                </MudText>
+
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    v@_appVersion
+                </MudText>
+
+                <MudLink Href="/auth/logout" Target="_self" Class="mud-nav-link">
+                    <MudIcon Icon="@Icons.Material.Filled.Logout" Class="me-2" />
+                    Logout
+                </MudLink>
+
+            </MudStack>
+        </Authorized>
+
+        <NotAuthorized>
+            <MudStack Spacing="0" Class="px-1 pb-1" Style="min-width:0;">
+                <MudText Typo="Typo.caption"
+                         Style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                    Not signed in
+                </MudText>
+
+                <MudText Typo="Typo.caption" Color="Color.Secondary">
+                    v@_appVersion
+                </MudText>
+
+                <MudNavLink Href="/login"
+                            Icon="@Icons.Material.Filled.Login"
+                            Title="Login">
+                    Login
+                </MudNavLink>
+            </MudStack>
+        </NotAuthorized>
+    </AuthorizeView>
+
+</MudStack>
+
+@code {
+    private bool _canImport = true;
+    private string _appVersion = "0.0.0";
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        _canImport = !authState.User.IsInRole("Viewer");
+        _appVersion =
+            Assembly.GetExecutingAssembly().GetName().Version?.ToString()
+            ?? "Unknown";
+    }
+}

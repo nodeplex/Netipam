@@ -1,0 +1,172 @@
+@page "/hosts"
+@rendermode InteractiveServer
+
+@using Microsoft.EntityFrameworkCore
+@using MudBlazor
+@using Netipam.Data
+
+@inject AppDbContext DbContext
+
+<MudStack Spacing="2">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <MudText Typo="Typo.h6">Hosts & Guests</MudText>
+        <MudSpacer />
+        <MudSwitch T="bool"
+                   @bind-Value="hideEmptyHosts"
+                   Color="Color.Primary"
+                   Label="Hide hosts without guests" />
+    </MudStack>
+
+    @if (!VisibleHosts.Any())
+    {
+        <MudPaper Class="pa-3">
+            <MudText Typo="Typo.body2">No hosts found.</MudText>
+        </MudPaper>
+    }
+    else
+    {
+        <MudExpansionPanels MultiExpansion="true">
+            @foreach (var item in VisibleHosts)
+            {
+                <MudExpansionPanel DisableRipple="true">
+                    <TitleContent>
+                        <MudStack Row="true"
+                                  AlignItems="AlignItems.Center"
+                                  JustifyContent="JustifyContent.SpaceBetween"
+                                  Spacing="1">
+                            <MudStack Spacing="0">
+                                @if (TryBuildAccessLink(item.Host.AccessLink, out var href))
+                                {
+                                    <MudLink Href="@href"
+                                             Target="_blank"
+                                             Rel="noopener noreferrer"
+                                             Underline="Underline.Always"
+                                             Typo="Typo.subtitle1"
+                                             Style="font-weight:600">
+                                        @item.Host.Name
+                                    </MudLink>
+                                }
+                                else
+                                {
+                                    <MudText Typo="Typo.subtitle1">@item.Host.Name</MudText>
+                                }
+                                <MudText Typo="Typo.caption">@item.Host.Hostname</MudText>
+                                <MudText Typo="Typo.caption">@item.Host.ClientType?.Name</MudText>
+                                <MudText Typo="Typo.caption">@FormatIpWithPort(item.Host)</MudText>
+                            </MudStack>
+
+                            <MudChip T="string"
+                                     Color="@StatusColor(item.Host)"
+                                     Variant="Variant.Filled"
+                                     Size="Size.Small"
+                                     Icon="@Icons.Material.Filled.Circle">
+                                @StatusText(item.Host)
+                            </MudChip>
+                        </MudStack>
+                    </TitleContent>
+
+                    <ChildContent>
+                        @if (item.Guests.Count == 0)
+                        {
+                            <MudText Typo="Typo.body2" Class="pa-2">No guests on this host.</MudText>
+                        }
+                        else
+                        {
+                            <MudTable T="Device"
+                                      Items="@item.Guests"
+                                      Dense="true"
+                                      Hover="true"
+                                      Bordered="true"
+                                      Striped="true">
+                                <HeaderContent>
+                                    <MudTh style="width:28px;"></MudTh>
+                                    <MudTh>Name</MudTh>
+                                    <MudTh>Hostname</MudTh>
+                                    <MudTh>Type</MudTh>
+                                    <MudTh>IP</MudTh>
+                                </HeaderContent>
+
+                                <RowTemplate Context="g">
+                                    <MudTd DataLabel="Status">
+                                        <MudTooltip Text="@StatusText(g)">
+                                            <MudIcon Icon="@Icons.Material.Filled.Circle"
+                                                     Color="@StatusColor(g)"
+                                                     Size="Size.Small"
+                                                     Style="font-size:12px;" />
+                                        </MudTooltip>
+                                    </MudTd>
+                                    <MudTd DataLabel="Name">
+                                        @if (TryBuildAccessLink(g.AccessLink, out var ghref))
+                                        {
+                                            <MudLink Href="@ghref"
+                                                     Target="_blank"
+                                                     Rel="noopener noreferrer"
+                                                     Underline="Underline.Always"
+                                                     Style="font-weight:600; font-size:inherit">
+                                                @g.Name
+                                            </MudLink>
+                                        }
+                                        else
+                                        {
+                                            @g.Name
+                                        }
+                                    </MudTd>
+                                    <MudTd DataLabel="Hostname">@g.Hostname</MudTd>
+                                    <MudTd DataLabel="Type">@g.ClientType?.Name</MudTd>
+                                    <MudTd DataLabel="IP">@FormatIpWithPort(g)</MudTd>
+                                </RowTemplate>
+                            </MudTable>
+                        }
+                    </ChildContent>
+                </MudExpansionPanel>
+            }
+        </MudExpansionPanels>
+    }
+</MudStack>
+
+@code {
+    private List<HostWithGuests> hosts = new();
+    private bool hideEmptyHosts;
+
+    private IEnumerable<HostWithGuests> VisibleHosts
+        => hideEmptyHosts ? hosts.Where(h => h.Guests.Count > 0) : hosts;
+
+    private static string StatusText(Device d)
+        => d.IsStatusTracked ? (d.IsOnline ? "Online" : "Offline") : "Not Tracked";
+
+    private static Color StatusColor(Device d)
+        => d.IsStatusTracked ? (d.IsOnline ? Color.Success : Color.Error) : Color.Default;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var hostDevices = await DbContext.Devices
+            .AsNoTracking()
+            .Include(d => d.ClientType)
+            .Where(d => d.ClientType != null && d.ClientType.IsHost)
+            .OrderBy(d => d.Name)
+            .ToListAsync();
+
+        var hostIds = hostDevices.Select(h => h.Id).ToList();
+
+        var guestDevices = await DbContext.Devices
+            .AsNoTracking()
+            .Include(d => d.ClientType)
+            .Where(d => d.HostDeviceId != null && hostIds.Contains(d.HostDeviceId.Value))
+            .OrderBy(d => d.Name)
+            .ToListAsync();
+
+        hosts = hostDevices
+            .Select(h => new HostWithGuests
+            {
+                Host = h,
+                Guests = guestDevices.Where(g => g.HostDeviceId == h.Id).ToList()
+            })
+            .ToList();
+    }
+
+    private sealed class HostWithGuests
+    {
+        public required Device Host { get; init; }
+        public required List<Device> Guests { get; init; }
+    }
+}

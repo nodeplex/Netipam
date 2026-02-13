@@ -1,0 +1,374 @@
+@using MudBlazor
+@using Microsoft.EntityFrameworkCore
+@using Netipam.Data
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Security.Claims
+@using Microsoft.JSInterop
+
+@implements IAsyncDisposable
+
+@inject AppDbContext DbContext
+@inject AuthenticationStateProvider AuthStateProvider
+@inject IJSRuntime JS
+
+<MudDialog>
+    <DialogContent>
+        <MudStack Spacing="2">
+            <MudText Typo="Typo.h6">Arrange Access Panel</MudText>
+
+            <MudPaper Class="pa-3" Elevation="0">
+                <MudText Typo="Typo.subtitle2" Class="mb-2">Categories</MudText>
+                @if (categoryRows.Count == 0)
+                {
+                    <MudText Typo="Typo.body2">No categories available.</MudText>
+                }
+                else
+                {
+                    <div class="drag-container" @ref="_categoryContainer">
+                        @for (int i = 0; i < categoryRows.Count; i++)
+                        {
+                            var row = categoryRows[i];
+                            <div class="drag-row mb-1" data-drag-index="@i">
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                    <span class="drag-handle" draggable="true" data-drag-id="@row.AccessCategoryId">
+                                        <MudIcon Icon="@Icons.Material.Filled.DragIndicator" />
+                                    </span>
+                                    <MudText>@row.Name</MudText>
+                                </MudStack>
+                            </div>
+                        }
+                    </div>
+                }
+                <MudText Typo="Typo.caption" Class="mt-2">
+                    Uncategorized items always stay at the end.
+                </MudText>
+            </MudPaper>
+
+            <MudPaper Class="pa-3" Elevation="0">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-2">
+                    <MudText Typo="Typo.subtitle2">Tiles</MudText>
+                    <MudSelect T="int?" Dense="true" Label="Category"
+                               @bind-Value="selectedCategoryId"
+                               @bind-Value:after="OnCategoryChanged">
+                        @foreach (var option in categoryOptions)
+                        {
+                            <MudSelectItem T="int?" Value="@option.Id">@option.Name</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudStack>
+
+                <div class="drag-container" @ref="_itemContainer">
+                    @if (itemRows.Count == 0)
+                    {
+                        <MudText Typo="Typo.body2">No items in this category.</MudText>
+                    }
+                    else
+                    {
+                        @for (int i = 0; i < itemRows.Count; i++)
+                        {
+                            var row = itemRows[i];
+                            <div class="drag-row mb-1" data-drag-index="@i">
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                    <span class="drag-handle" draggable="true" data-drag-id="@row.DeviceId">
+                                        <MudIcon Icon="@Icons.Material.Filled.DragIndicator" />
+                                    </span>
+                                    <MudText>@row.Name</MudText>
+                                </MudStack>
+                            </div>
+                        }
+                    }
+                </div>
+            </MudPaper>
+        </MudStack>
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Text" Color="Color.Secondary" OnClick="Cancel">Cancel</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="Save">Save</MudButton>
+    </DialogActions>
+</MudDialog>
+
+<style>
+    .drag-row {
+        user-select: none;
+        padding: 2px 4px;
+        border-radius: 4px;
+    }
+
+    .drag-row:hover {
+        background-color: rgba(0,0,0,0.04);
+    }
+
+    .drag-row.drag-over {
+        background-color: rgba(0,0,0,0.08);
+        outline: 1px dashed rgba(0,0,0,0.25);
+        outline-offset: 2px;
+    }
+
+    .drag-handle {
+        cursor: grab;
+        display: inline-flex;
+        align-items: center;
+        padding: 2px;
+    }
+</style>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private string? _userId;
+    private DotNetObjectReference<AccessPanelOrderDialog>? _dotNetRef;
+    private ElementReference _categoryContainer;
+    private ElementReference _itemContainer;
+    private bool _jsReady;
+
+    private List<AccessCategory> categories = new();
+    private List<Device> devices = new();
+
+    private List<CategoryRow> categoryRows = new();
+    private List<CategoryOption> categoryOptions = new();
+    private int? selectedCategoryId;
+    private const int UncategorizedKey = -1;
+    private List<ItemRow> itemRows = new();
+    private Dictionary<int, List<ItemRow>> itemRowsByCategory = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _userId = await GetUserIdAsync();
+        if (string.IsNullOrWhiteSpace(_userId))
+        {
+            MudDialog.Close(DialogResult.Cancel());
+            return;
+        }
+
+        categories = await DbContext.AccessCategories
+            .AsNoTracking()
+            .OrderBy(c => c.Name)
+            .ToListAsync();
+
+        devices = await DbContext.Devices
+            .AsNoTracking()
+            .Where(d => !string.IsNullOrWhiteSpace(d.AccessLink))
+            .Include(d => d.AccessCategory)
+            .OrderBy(d => d.Name)
+            .ToListAsync();
+
+        await LoadCategoryRowsAsync();
+        BuildCategoryOptions();
+        await BuildItemRowsByCategoryAsync();
+
+        selectedCategoryId = categoryOptions.FirstOrDefault()?.Id;
+        BuildItemRows();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_jsReady)
+        {
+            _dotNetRef = DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("netipamDragOrder.init", _categoryContainer, _dotNetRef, "categories");
+            await JS.InvokeVoidAsync("netipamDragOrder.init", _itemContainer, _dotNetRef, "items");
+            _jsReady = true;
+        }
+    }
+
+    private async Task LoadCategoryRowsAsync()
+    {
+        var orderMap = await DbContext.UserAccessCategoryOrders
+            .AsNoTracking()
+            .Where(o => o.UserId == _userId)
+            .ToDictionaryAsync(o => o.AccessCategoryId, o => o.SortOrder);
+
+        categoryRows = categories
+            .Select(c => new CategoryRow
+            {
+                AccessCategoryId = c.Id,
+                Name = c.Name,
+                SortOrder = orderMap.TryGetValue(c.Id, out var order) ? order : int.MaxValue
+            })
+            .OrderBy(r => r.SortOrder)
+            .ThenBy(r => r.Name)
+            .ToList();
+    }
+
+    private void BuildCategoryOptions()
+    {
+        categoryOptions = new List<CategoryOption>
+        {
+            new(null, "Uncategorized")
+        };
+        categoryOptions.AddRange(categories.Select(c => new CategoryOption(c.Id, c.Name)));
+    }
+
+    private void OnCategoryChanged()
+        => BuildItemRows();
+
+    private async Task BuildItemRowsByCategoryAsync()
+    {
+        var orderMap = await DbContext.UserAccessItemOrders
+            .AsNoTracking()
+            .Where(o => o.UserId == _userId)
+            .ToDictionaryAsync(o => o.DeviceId, o => o.SortOrder);
+
+        itemRowsByCategory = new Dictionary<int, List<ItemRow>>();
+
+        foreach (var group in devices.GroupBy(d => d.AccessCategoryId))
+        {
+            var rows = group
+                .Select(d => new ItemRow
+                {
+                    DeviceId = d.Id,
+                    Name = d.Name,
+                    SortOrder = orderMap.TryGetValue(d.Id, out var order) ? order : int.MaxValue
+                })
+                .OrderBy(r => r.SortOrder)
+                .ThenBy(r => r.Name)
+                .ToList();
+
+            itemRowsByCategory[GetCategoryKey(group.Key)] = rows;
+        }
+    }
+
+    private void BuildItemRows()
+    {
+        if (selectedCategoryId is null && !categoryOptions.Any())
+        {
+            itemRows = new();
+            return;
+        }
+
+        if (!itemRowsByCategory.TryGetValue(GetCategoryKey(selectedCategoryId), out var rows))
+        {
+            itemRows = new();
+            return;
+        }
+
+        itemRows = rows;
+    }
+
+    [JSInvokable]
+    public Task HandleDrop(string listKey, int dragId, int toIndex)
+    {
+        if (listKey == "categories")
+        {
+            var fromIndex = categoryRows.FindIndex(r => r.AccessCategoryId == dragId);
+            if (fromIndex >= 0)
+                MoveListItem(categoryRows, fromIndex, toIndex);
+        }
+        else if (listKey == "items")
+        {
+            var fromIndex = itemRows.FindIndex(r => r.DeviceId == dragId);
+            if (fromIndex >= 0)
+                MoveListItem(itemRows, fromIndex, toIndex);
+            itemRowsByCategory[GetCategoryKey(selectedCategoryId)] = itemRows;
+        }
+
+        StateHasChanged();
+        return Task.CompletedTask;
+    }
+
+    private static void MoveListItem<T>(List<T> list, int fromIndex, int toIndex)
+    {
+        if (fromIndex == toIndex || fromIndex < 0 || toIndex < 0)
+            return;
+
+        if (fromIndex >= list.Count)
+            return;
+
+        if (toIndex >= list.Count)
+            toIndex = list.Count - 1;
+
+        var item = list[fromIndex];
+        list.RemoveAt(fromIndex);
+
+        if (toIndex > fromIndex)
+            toIndex--;
+
+        if (toIndex < 0) toIndex = 0;
+        if (toIndex > list.Count) toIndex = list.Count;
+
+        list.Insert(toIndex, item);
+    }
+
+    private async Task Save()
+    {
+        if (string.IsNullOrWhiteSpace(_userId))
+        {
+            MudDialog.Close(DialogResult.Cancel());
+            return;
+        }
+
+        var existingCategories = await DbContext.UserAccessCategoryOrders
+            .Where(o => o.UserId == _userId)
+            .ToListAsync();
+        if (existingCategories.Count > 0)
+            DbContext.UserAccessCategoryOrders.RemoveRange(existingCategories);
+
+        for (int i = 0; i < categoryRows.Count; i++)
+        {
+            DbContext.UserAccessCategoryOrders.Add(new UserAccessCategoryOrder
+            {
+                UserId = _userId,
+                AccessCategoryId = categoryRows[i].AccessCategoryId,
+                SortOrder = i
+            });
+        }
+
+        var existingItems = await DbContext.UserAccessItemOrders
+            .Where(o => o.UserId == _userId)
+            .ToListAsync();
+        if (existingItems.Count > 0)
+            DbContext.UserAccessItemOrders.RemoveRange(existingItems);
+
+        foreach (var kvp in itemRowsByCategory)
+        {
+            var list = kvp.Value;
+            for (int i = 0; i < list.Count; i++)
+            {
+                DbContext.UserAccessItemOrders.Add(new UserAccessItemOrder
+                {
+                    UserId = _userId,
+                    DeviceId = list[i].DeviceId,
+                    SortOrder = i
+                });
+            }
+        }
+
+        await DbContext.SaveChangesAsync();
+        MudDialog.Close(DialogResult.Ok(true));
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task<string?> GetUserIdAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        return user.FindFirstValue(ClaimTypes.NameIdentifier);
+    }
+
+    private static int GetCategoryKey(int? categoryId)
+        => categoryId ?? UncategorizedKey;
+
+    public async ValueTask DisposeAsync()
+    {
+        _dotNetRef?.Dispose();
+        await Task.CompletedTask;
+    }
+
+    private sealed class CategoryRow
+    {
+        public int AccessCategoryId { get; set; }
+        public string Name { get; set; } = "";
+        public int SortOrder { get; set; }
+    }
+
+    private sealed record CategoryOption(int? Id, string Name);
+
+    private sealed class ItemRow
+    {
+        public int DeviceId { get; set; }
+        public string Name { get; set; } = "";
+        public int SortOrder { get; set; }
+    }
+}

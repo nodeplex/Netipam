@@ -1,0 +1,961 @@
+﻿@page "/subnets/{SubnetId:int}/ips"
+@rendermode InteractiveServer
+
+@using MudBlazor
+@using Microsoft.EntityFrameworkCore
+@using Netipam.Data
+@using System.Text.RegularExpressions
+@using Netipam.Services
+@using Microsoft.AspNetCore.Components.Authorization
+@using System.Security.Claims
+
+@implements IDisposable
+
+@inject AppDbContext DbContext
+@inject AppSettingsService SettingsService
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject ILogger<SubnetIps> Logger
+@inject ISnackbar Snackbar
+
+<MudStack Spacing="2">
+    <style>
+        .subnetips-filter .mud-input-root,
+        .subnetips-filter .mud-input-slot {
+            min-height: 26px;
+            height: 26px;
+        }
+        .subnetips-filter .mud-input-slot {
+            display: flex;
+            align-items: center;
+        }
+    </style>
+
+    <MudStack Row="true" AlignItems="AlignItems.End" Spacing="2">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                       Title="Back to Subnets"
+                       OnClick="@(() => Nav.NavigateTo("/subnets"))" />
+
+        <MudText Typo="Typo.h5">Subnet IPs</MudText>
+        <MudSpacer />
+
+        <!-- ✅ NEW: Online/Offline filters -->
+        <MudCheckBox T="bool" Dense="true" Label="Online" @bind-Value="showOnline" />
+        <MudCheckBox T="bool" Dense="true" Label="Offline" @bind-Value="showOffline" />
+        <MudCheckBox T="bool" Dense="true" Label="Hide DHCP" @bind-Value="hideDhcp" />
+
+        <MudSelect T="IpViewMode" Dense="true" Label="View" Style="min-width: 160px;"
+                   Class="subnetips-filter"
+                   @bind-Value="viewMode">
+            <MudSelectItem Value="IpViewMode.All">All</MudSelectItem>
+            <MudSelectItem Value="IpViewMode.Used">Used</MudSelectItem>
+            <MudSelectItem Value="IpViewMode.Available">Available</MudSelectItem>
+            <MudSelectItem Value="IpViewMode.Reserved">Reserved</MudSelectItem>
+            <MudSelectItem Value="IpViewMode.Deprecated">Deprecated</MudSelectItem>
+            <MudSelectItem Value="IpViewMode.Dhcp">DHCP</MudSelectItem>
+        </MudSelect>
+
+        <MudTextField T="string"
+                      Dense="true"
+                      Placeholder="Search (IP, name, hostname, MAC, conn, upstream...)"
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Filled.Search"
+                      Immediate="true"
+                      Style="min-width: 360px;"
+                      Class="subnetips-filter"
+                      @bind-Value="search" />
+    
+        <MudMenu Dense="true" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Class="download-menu">
+            <ActivatorContent>
+                <MudIconButton Icon="@Icons.Material.Filled.Download"
+                               Title="Export"
+                               Size="Size.Medium"
+                               Class="toolbar-button download-icon-btn" />
+            </ActivatorContent>
+            <ChildContent>
+                <MudMenuItem Href="@($"/export/subnets/{SubnetId}/ips.xlsx")">Export Subnet</MudMenuItem>
+            </ChildContent>
+        </MudMenu>
+                  
+     </MudStack>
+
+    @if (!string.IsNullOrWhiteSpace(status))
+    {
+        <MudAlert Severity="Severity.Info" Dense="true">@status</MudAlert>
+    }
+
+    @if (subnet is null)
+    {
+        <MudAlert Severity="Severity.Error" Dense="true">Subnet not found.</MudAlert>
+    }
+    else if (!string.IsNullOrWhiteSpace(error))
+    {
+        <MudAlert Severity="Severity.Error" Dense="true">@error</MudAlert>
+    }
+    else if (rows.Count == 0)
+    {
+        <MudAlert Severity="Severity.Warning" Dense="true">No usable IPs for this subnet.</MudAlert>
+    }
+    else
+    {
+        <MudPaper Class="pa-3" Elevation="1">
+            <MudText Typo="Typo.subtitle2">
+                @subnet.Name (@subnet.Cidr)
+            </MudText>
+            <MudText Typo="Typo.caption" Class="mt-1">
+                Usable IPs: @rows.Count • Used: @rows.Count(r => r.IsUsed) • Free: @rows.Count(r => !r.IsUsed)
+            </MudText>
+        </MudPaper>
+
+        <MudTable T="IpRow"
+                  Items="@FilteredRows"
+                  FixedHeader="true"
+                  Height="calc(100vh - 260px)"
+                  Dense="true"
+                  Hover="true"
+                  Bordered="true"
+                  Striped="true">
+
+            <HeaderContent>
+                <MudTh style="width:160px;">
+                    <MudTableSortLabel SortBy="@(new Func<IpRow, object>(r => r.IpUInt))">
+                        IP
+                    </MudTableSortLabel>
+                </MudTh>
+
+                <MudTh style="width:120px;">Status</MudTh>
+                <MudTh>Notes</MudTh>
+
+                <MudTh>Name</MudTh>
+                <MudTh>Type</MudTh>
+                <MudTh>Hostname</MudTh>
+                <MudTh style="width:160px;">MAC</MudTh>
+                <MudTh style="width:70px;">Conn</MudTh>
+                <MudTh>Upstream</MudTh>
+                @if (_canEdit)
+                {
+                    <MudTh style="width:60px;">Resv</MudTh>
+                    <MudTh style="width:90px;">Add</MudTh>
+                }
+            </HeaderContent>
+
+            <RowTemplate Context="r">
+                <MudTd DataLabel="IP">
+                    @if (!r.IsUsed)
+                    {
+                        @r.Ip
+                    }
+                    else if (r.Devices.Count == 1)
+                    {
+                        @FormatIpWithPort(r.Devices[0])
+                    }
+                    else
+                    {
+                        <MudStack Spacing="0">
+                            @foreach (var d in r.Devices)
+                            {
+                                <MudText Typo="Typo.body2">@FormatIpWithPort(d)</MudText>
+                            }
+                        </MudStack>
+                    }
+                </MudTd>
+
+                <MudTd DataLabel="Status">
+                    @StatusCell(r)
+                </MudTd>
+                <MudTd DataLabel="Notes">@DisplayValue(r.Reservation?.Notes)</MudTd>
+
+                @if (!r.IsUsed)
+                {
+                    <MudTd DataLabel="Name">-</MudTd>
+                    <MudTd DataLabel="Type">-</MudTd>
+                    <MudTd DataLabel="Hostname">-</MudTd>
+                    <MudTd DataLabel="MAC">-</MudTd>
+                    <MudTd DataLabel="Conn">-</MudTd>
+                    <MudTd DataLabel="Where">-</MudTd>
+                }
+                else
+                {
+                    <MudTd DataLabel="Name">
+                        @if (r.Devices.Count == 1)
+                        {
+                            var device = r.Devices[0];
+                            var href = BuildAccessHref(device.AccessLink);
+                            if (href is not null)
+                            {
+                                <MudLink Href="@href"
+                                         Target="_blank"
+                                         Rel="noopener noreferrer"
+                                         Underline="Underline.Always"
+                                         Style="font-weight:600; font-size:inherit">
+                                    @device.Name
+                                </MudLink>
+                            }
+                            else
+                            {
+                                @device.Name
+                            }
+                        }
+                        else
+                        {
+                            <MudStack Spacing="0">
+                                @foreach (var device in r.Devices)
+                                {
+                                    var href = BuildAccessHref(device.AccessLink);
+                                    if (href is not null)
+                                    {
+                                        <MudLink Href="@href"
+                                                 Target="_blank"
+                                                 Rel="noopener noreferrer"
+                                                 Underline="Underline.Always"
+                                                 Style="font-weight:600; font-size:inherit">
+                                            @device.Name
+                                        </MudLink>
+                                    }
+                                    else
+                                    {
+                                        <MudText Typo="Typo.body2">@device.Name</MudText>
+                                    }
+                                }
+                            </MudStack>
+                        }
+                    </MudTd>
+
+                    <MudTd DataLabel="Type">
+                        @if (r.Devices.Count == 1)
+                        {
+                            @DisplayMulti(r.Devices.Select(d => d.ClientType?.Name))
+                        }
+                        else
+                        {
+                            <MudStack Spacing="0">
+                                @foreach (var device in r.Devices)
+                                {
+                                    <MudText Typo="Typo.body2">@DisplayValue(device.ClientType?.Name)</MudText>
+                                }
+                            </MudStack>
+                        }
+                    </MudTd>
+
+                    <MudTd DataLabel="Hostname">
+                        @if (r.Devices.Count == 1)
+                        {
+                            @DisplayMulti(r.Devices.Select(d => d.Hostname))
+                        }
+                        else
+                        {
+                            <MudStack Spacing="0">
+                                @foreach (var device in r.Devices)
+                                {
+                                    <MudText Typo="Typo.body2">@DisplayValue(device.Hostname)</MudText>
+                                }
+                            </MudStack>
+                        }
+                    </MudTd>
+
+                    <MudTd DataLabel="MAC">
+                        @if (r.Devices.Count == 1)
+                        {
+                            @DisplayMulti(r.Devices.Select(d => d.MacAddress))
+                        }
+                        else
+                        {
+                            <MudStack Spacing="0">
+                                @foreach (var device in r.Devices)
+                                {
+                                    <MudText Typo="Typo.body2">@DisplayValue(device.MacAddress)</MudText>
+                                }
+                            </MudStack>
+                        }
+                    </MudTd>
+
+                    <MudTd DataLabel="Conn">
+                        @if (r.Devices.Count == 1)
+                        {
+                            @ConnCell(r)
+                        }
+                        else
+                        {
+                            <MudStack Spacing="0" AlignItems="AlignItems.Center">
+                                @foreach (var device in r.Devices)
+                                {
+                                    @ConnIconForDevice(device)
+                                }
+                            </MudStack>
+                        }
+                    </MudTd>
+
+                    <MudTd DataLabel="Where">
+                        @if (r.Devices.Count == 1)
+                        {
+                            @DisplayMulti(r.Devices.Select(d => d.ConnectionDetail))
+                        }
+                        else
+                        {
+                            <MudStack Spacing="0">
+                                @foreach (var device in r.Devices)
+                                {
+                                    <MudText Typo="Typo.body2">@DisplayValue(device.ConnectionDetail)</MudText>
+                                }
+                            </MudStack>
+                        }
+                    </MudTd>
+                }
+
+                @if (_canEdit)
+                {
+                    <MudTd DataLabel="Resv">
+                        @if (!r.IsUsed)
+                        {
+                            <MudIconButton Icon="@Icons.Material.Filled.EditNote"
+                                           Size="Size.Small"
+                                           Title="Edit reservation"
+                                           OnClick="@(async () => await OpenReservationDialogAsync(r))" />
+                        }
+                    </MudTd>
+                    <MudTd DataLabel="Add">
+                        <MudStack Row="true" Spacing="1">
+                            <MudTooltip Text="Add Client">
+                                <MudIconButton Icon="@Icons.Material.Filled.PersonAdd"
+                                               Color="Color.Primary"
+                                               Size="Size.Small"
+                                               Disabled="@r.IsUsed"
+                                               OnClick="@(() => OpenAddFromIp(false, r.Ip))" />
+                            </MudTooltip>
+                            <MudTooltip Text="Add Device">
+                                <MudIconButton Icon="@Icons.Material.Filled.AddToQueue"
+                                               Color="Color.Info"
+                                               Size="Size.Small"
+                                               Disabled="@r.IsUsed"
+                                               OnClick="@(() => OpenAddFromIp(true, r.Ip))" />
+                            </MudTooltip>
+                        </MudStack>
+                    </MudTd>
+                }
+            </RowTemplate>
+
+            <NoRecordsContent>
+                <MudText Typo="Typo.body2" Class="pa-4">No IPs match your filters.</MudText>
+            </NoRecordsContent>
+        </MudTable>
+    }
+</MudStack>
+
+<style>
+    .download-icon-btn {
+        height: 26px;
+        width: 26px;
+        padding: 0;
+    }
+
+    .download-menu {
+        margin-right: 20px;
+    }
+</style>
+
+@code {
+    [Parameter] public int SubnetId { get; set; }
+
+    private Subnet? subnet;
+    private string? status;
+    private string? error;
+
+    private List<IpRow> rows = new();
+    private Dictionary<uint, IpAssignment> reservationsByIp = new();
+
+    private string? search;
+    private IpViewMode viewMode = IpViewMode.All;
+    private bool _canEdit = true;
+
+    // ✅ NEW: online/offline toggles (default = show all)
+    private bool showOnline = true;
+    private bool showOffline = true;
+    private bool hideDhcp = false;
+
+    private const int MaxUsableToRender = 8192;
+
+    // Settings-driven behavior
+    private bool _showTooltips = true;
+    private CancellationTokenSource? _refreshCts;
+    private Task? _refreshLoop;
+
+    private static readonly Regex FirstIPv4Regex =
+        new(@"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b",
+            RegexOptions.Compiled);
+
+    protected override async Task OnInitializedAsync()
+    {
+        SettingsService.SettingsChanged += OnSettingsChanged;
+
+        var s = await SettingsService.LoadAsync();
+        ApplySettings(s);
+
+        await SetPermissionsAsync();
+        await LoadAsync();
+    }
+
+    private async Task SetPermissionsAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        _canEdit = !user.IsInRole("Viewer");
+    }
+
+    private void OnSettingsChanged(AppSetting s)
+    {
+        ApplySettings(s);
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void ApplySettings(AppSetting s)
+    {
+        _showTooltips = s.ShowLastSeenTooltips;
+        StartOrRestartAutoRefresh(s.UiAutoRefreshSeconds);
+    }
+
+    private void StartOrRestartAutoRefresh(int seconds)
+    {
+        StopAutoRefresh();
+
+        if (seconds <= 0)
+            return;
+
+        var interval = TimeSpan.FromSeconds(Math.Clamp(seconds, 5, 3600));
+        _refreshCts = new CancellationTokenSource();
+        var ct = _refreshCts.Token;
+
+        _refreshLoop = Task.Run(async () =>
+        {
+            try
+            {
+                var timer = new PeriodicTimer(interval);
+                while (await timer.WaitForNextTickAsync(ct))
+                {
+                    await LoadAsync();
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+            catch (OperationCanceledException) { }
+        }, ct);
+    }
+
+    private void StopAutoRefresh()
+    {
+        try { _refreshCts?.Cancel(); } catch { }
+        _refreshCts?.Dispose();
+        _refreshCts = null;
+        _refreshLoop = null;
+    }
+
+    public void Dispose()
+    {
+        SettingsService.SettingsChanged -= OnSettingsChanged;
+        StopAutoRefresh();
+    }
+
+    private async Task LoadAsync()
+    {
+        error = null;
+        status = null;
+
+        subnet = await DbContext.Subnets
+            .AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Id == SubnetId);
+
+        if (subnet is null)
+            return;
+
+        if (string.IsNullOrWhiteSpace(subnet.Cidr))
+        {
+            error = "Subnet CIDR is blank.";
+            rows = new();
+            return;
+        }
+
+        if (!IpCidr.TryParseIPv4Cidr(subnet.Cidr, out var info, out var parseError))
+        {
+            error = $"Invalid CIDR: {subnet.Cidr}" + (!string.IsNullOrWhiteSpace(parseError) ? $" ({parseError})" : "");
+            rows = new();
+            return;
+        }
+
+        if (info.UsableAddresses > MaxUsableToRender)
+        {
+            error = $"Subnet is large ({info.UsableAddresses} usable IPs). Safety limit is {MaxUsableToRender}.";
+            rows = new();
+            return;
+        }
+
+        var devicesWithIp = await DbContext.Devices
+            .AsNoTracking()
+            .Include(d => d.ClientType)
+            .Where(d => !string.IsNullOrWhiteSpace(d.IpAddress))
+            .ToListAsync();
+
+        var reservations = await DbContext.IpAssignments
+            .AsNoTracking()
+            .Where(a => a.SubnetId == SubnetId)
+            .ToListAsync();
+
+        reservationsByIp = new Dictionary<uint, IpAssignment>();
+        foreach (var a in reservations)
+        {
+            var extracted = ExtractFirstIPv4(a.IpAddress);
+            if (extracted is null)
+                continue;
+
+            if (!IpCidr.TryParseIPv4(extracted, out var ipUInt, out _))
+                continue;
+
+            if (ipUInt < info.NetworkUInt || ipUInt > info.BroadcastUInt)
+                continue;
+
+            reservationsByIp[ipUInt] = a;
+        }
+
+        var byIp = new Dictionary<uint, List<Device>>();
+
+        foreach (var d in devicesWithIp)
+        {
+            var ipText = (d.IpAddress ?? "").Trim();
+
+            var extracted = ExtractFirstIPv4(ipText);
+            if (extracted is null)
+                continue;
+
+            if (!IpCidr.TryParseIPv4(extracted, out var ipUInt, out _))
+                continue;
+
+            if (ipUInt < info.NetworkUInt || ipUInt > info.BroadcastUInt)
+                continue;
+
+            if (!byIp.TryGetValue(ipUInt, out var list))
+            {
+                list = new List<Device>();
+                byIp[ipUInt] = list;
+            }
+            list.Add(d);
+        }
+
+        var usableIps = GetUsableIpUInts(info);
+
+        rows = usableIps.Select(u =>
+        {
+            byIp.TryGetValue(u, out var devs);
+            devs ??= new List<Device>();
+
+            return new IpRow
+            {
+                IpUInt = u,
+                Ip = IpCidr.UIntToIPv4(u),
+                Devices = devs,
+                Reservation = reservationsByIp.TryGetValue(u, out var resv) ? resv : null
+            };
+        }).ToList();
+
+        status = $"Loaded {rows.Count} usable IPs for {info.Cidr}.";
+    }
+
+    private static string? ExtractFirstIPv4(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return null;
+
+        var m = FirstIPv4Regex.Match(text);
+        return m.Success ? m.Value : null;
+    }
+
+    // ✅ Row-level status helpers for filtering
+    private bool IsRowOnline(IpRow r)
+        => r.IsUsed && r.Devices.Any(d => d.IsStatusTracked && d.IsOnline);
+
+    private bool IsRowOffline(IpRow r)
+        => r.IsUsed && !IsRowOnline(r);
+
+    private bool IsRowDhcp(IpRow r)
+        => GetRowStatus(r) == IpDisplayStatus.Dhcp;
+
+    private IpDisplayStatus GetRowStatus(IpRow r)
+    {
+        if (r.IsUsed)
+            return IsInDhcpRange(r) ? IpDisplayStatus.AssignedDhcp : IpDisplayStatus.AssignedStatic;
+
+        if (r.Reservation is not null)
+        {
+            return r.Reservation.Status switch
+            {
+                IpReservationStatus.Reserved => IpDisplayStatus.Reserved,
+                IpReservationStatus.Dhcp => IpDisplayStatus.Dhcp,
+                IpReservationStatus.Deprecated => IpDisplayStatus.Deprecated,
+                _ => IpDisplayStatus.Available
+            };
+        }
+
+        if (subnet is null)
+            return IpDisplayStatus.Available;
+
+        var start = subnet.DhcpRangeStart;
+        var end = subnet.DhcpRangeEnd;
+        if (string.IsNullOrWhiteSpace(start) || string.IsNullOrWhiteSpace(end))
+            return IpDisplayStatus.Available;
+
+        if (!IpCidr.TryParseIPv4(start, out var startVal, out _))
+            return IpDisplayStatus.Available;
+        if (!IpCidr.TryParseIPv4(end, out var endVal, out _))
+            return IpDisplayStatus.Available;
+
+        var min = Math.Min(startVal, endVal);
+        var max = Math.Max(startVal, endVal);
+        return r.IpUInt >= min && r.IpUInt <= max ? IpDisplayStatus.Dhcp : IpDisplayStatus.Available;
+    }
+
+    private bool IsInDhcpRange(IpRow r)
+    {
+        if (subnet is null)
+            return false;
+
+        var start = subnet.DhcpRangeStart;
+        var end = subnet.DhcpRangeEnd;
+        if (string.IsNullOrWhiteSpace(start) || string.IsNullOrWhiteSpace(end))
+            return false;
+
+        if (!IpCidr.TryParseIPv4(start, out var startVal, out _))
+            return false;
+        if (!IpCidr.TryParseIPv4(end, out var endVal, out _))
+            return false;
+
+        var min = Math.Min(startVal, endVal);
+        var max = Math.Max(startVal, endVal);
+        return r.IpUInt >= min && r.IpUInt <= max;
+    }
+
+    private IEnumerable<IpRow> FilteredRows
+    {
+        get
+        {
+            IEnumerable<IpRow> q = rows;
+
+            // existing Used/Free view filter
+            q = viewMode switch
+            {
+                IpViewMode.Used => q.Where(r => r.IsUsed),
+                IpViewMode.Available => q.Where(r => !r.IsUsed && GetRowStatus(r) == IpDisplayStatus.Available),
+                IpViewMode.Reserved => q.Where(r => !r.IsUsed && GetRowStatus(r) == IpDisplayStatus.Reserved),
+                IpViewMode.Deprecated => q.Where(r => !r.IsUsed && GetRowStatus(r) == IpDisplayStatus.Deprecated),
+                IpViewMode.Dhcp => q.Where(r =>
+                    GetRowStatus(r) == IpDisplayStatus.Dhcp ||
+                    (r.IsUsed && IsInDhcpRange(r))),
+                _ => q
+            };
+
+            // ✅ NEW: online/offline filter (applies to USED rows only)
+            // If neither is checked, show none (same behavior as Devices/Clients).
+            q = q.Where(r =>
+                !r.IsUsed ||
+                (showOnline && IsRowOnline(r)) ||
+                (showOffline && IsRowOffline(r)));
+
+            if (hideDhcp)
+                q = q.Where(r => GetRowStatus(r) != IpDisplayStatus.Dhcp && !IsInDhcpRange(r));
+
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                var s = search.Trim();
+                q = q.Where(r =>
+                    Contains(r.Ip, s) ||
+                    r.Devices.Any(d =>
+                        Contains(d.Name, s) ||
+                        Contains(d.Hostname, s) ||
+                        Contains(d.MacAddress, s) ||
+                        Contains(d.ConnectionType, s) ||
+                        Contains(d.ConnectionDetail, s)
+                    )
+                );
+            }
+
+            return q;
+        }
+    }
+
+    private static bool Contains(string? haystack, string needle)
+        => !string.IsNullOrWhiteSpace(haystack)
+           && haystack.Contains(needle, StringComparison.OrdinalIgnoreCase);
+
+private static string DisplayMulti(IEnumerable<string?> values)
+{
+        var list = values
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (list.Count == 0) return "—";
+        if (list.Count == 1) return list[0];
+
+    return $"{list[0]} (+{list.Count - 1})";
+}
+
+private static string DisplayValue(string? value)
+    => string.IsNullOrWhiteSpace(value) ? "—" : value.Trim();
+
+private static string? BuildAccessHref(string? raw)
+{
+    if (TryBuildAccessLink(raw, out var href))
+        return href;
+
+    return string.IsNullOrWhiteSpace(raw) ? null : raw.Trim();
+}
+
+    // -----------------------------
+    // Conn rendering (icon-only)
+    // -----------------------------
+    private RenderFragment ConnCell(IpRow r) => @<div style="display:flex; align-items:center; justify-content:center;">
+@if (!r.IsUsed)
+    {
+    <span>—</span>
+    }
+    else
+    {
+    var distinctTypes = r.Devices
+    .Select(d => (d.ConnectionType ?? "").Trim())
+    .Where(s => !string.IsNullOrWhiteSpace(s))
+    .Distinct(StringComparer.OrdinalIgnoreCase)
+    .ToList();
+
+    if (distinctTypes.Count == 0)
+    {
+    <span>—</span>
+    }
+    else if (distinctTypes.Count == 1)
+    {
+@ConnIconForDevice(r.Devices[0])
+    }
+    else
+    {
+    <MudChip T="string" Color="Color.Error" Variant="Variant.Outlined" Size="Size.Small">
+        DUP
+    </MudChip>
+    }
+    }
+</div>;
+
+private RenderFragment ConnIconForDevice(Device d) => @<span>
+@{
+    var type = (d.ConnectionType ?? "").Trim();
+
+    if (string.IsNullOrWhiteSpace(type))
+    {
+        <span>—</span>
+    }
+    else if (type.Equals("WiFi", StringComparison.OrdinalIgnoreCase))
+    {
+        var color = GetWifiColor(d.ConnectionDetail);
+        <MudTooltip Text="@GetConnTooltip(d)" Placement="Placement.Top">
+            <MudIcon Icon="@Icons.Material.Filled.Wifi" Color="@color" Size="Size.Small" />
+        </MudTooltip>
+    }
+    else
+    {
+        <MudTooltip Text="@GetConnTooltip(d)" Placement="Placement.Top">
+            <MudIcon Icon="@Icons.Material.Filled.SettingsEthernet" Color="Color.Default" Size="Size.Small" />
+        </MudTooltip>
+    }
+}
+</span>;
+
+// -----------------------------
+// Status rendering (dot + chip)
+// -----------------------------
+private RenderFragment StatusCell(IpRow r) => @<div style="display:flex; align-items:center; gap:8px;">
+@{
+    var status = GetRowStatus(r);
+    var online = (status == IpDisplayStatus.AssignedStatic || status == IpDisplayStatus.AssignedDhcp) && IsRowOnline(r);
+}
+
+@if (status == IpDisplayStatus.AssignedStatic || status == IpDisplayStatus.AssignedDhcp)
+{
+    if (_showTooltips)
+    {
+        <MudTooltip Text="@BuildRowTooltip(r)" Placement="Placement.Right">
+            <MudIcon Icon="@Icons.Material.Filled.Circle"
+                     Color="@(online ? Color.Success : Color.Error)"
+                     Size="Size.Small" />
+        </MudTooltip>
+    }
+    else
+    {
+        <MudIcon Icon="@Icons.Material.Filled.Circle"
+                 Color="@(online ? Color.Success : Color.Error)"
+                 Size="Size.Small" />
+    }
+
+    if (status == IpDisplayStatus.AssignedDhcp)
+    {
+        <MudChip T="string" Color="Color.Info" Variant="Variant.Outlined" Size="Size.Small">Assigned (DHCP)</MudChip>
+    }
+    else
+    {
+        <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small">Assigned (Static)</MudChip>
+    }
+}
+else if (status == IpDisplayStatus.Reserved)
+{
+    <MudIcon Icon="@Icons.Material.Filled.Circle" Color="Color.Warning" Size="Size.Small" />
+    <MudChip T="string" Color="Color.Warning" Variant="Variant.Outlined" Size="Size.Small">Reserved</MudChip>
+}
+else if (status == IpDisplayStatus.Deprecated)
+{
+    <MudIcon Icon="@Icons.Material.Filled.Circle" Color="Color.Error" Size="Size.Small" />
+    <MudChip T="string" Color="Color.Error" Variant="Variant.Outlined" Size="Size.Small">Deprecated</MudChip>
+}
+else if (status == IpDisplayStatus.Dhcp)
+{
+    <MudIcon Icon="@Icons.Material.Filled.Circle" Color="Color.Info" Size="Size.Small" />
+    <MudChip T="string" Color="Color.Info" Variant="Variant.Outlined" Size="Size.Small">DHCP</MudChip>
+}
+else
+{
+    <MudIcon Icon="@Icons.Material.Filled.Circle" Color="Color.Default" Size="Size.Small" />
+    <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small">Available</MudChip>
+}
+</div>;
+
+private string BuildRowTooltip(IpRow r)
+{
+    if (!r.IsUsed)
+        return "Free";
+
+    DateTime? lastSeenUtc = r.Devices
+        .Where(d => d.LastSeenAt is not null)
+        .Select(d => d.LastSeenAt)
+        .Max();
+
+    DateTime? lastOnlineUtc = r.Devices
+        .Where(d => d.LastOnlineAt is not null)
+        .Select(d => d.LastOnlineAt)
+        .Max();
+
+    var state = IsRowOnline(r) ? "Online" : "Offline";
+
+    if (IsRowOnline(r))
+        return $"{state}\nLast seen: {FormatAbsRel(lastSeenUtc)}";
+
+    var lines = new List<string>
+        {
+            $"{state}",
+            $"Last seen: {FormatAbsRel(lastSeenUtc)}"
+        };
+
+    if (lastOnlineUtc is not null)
+    {
+        var same = lastSeenUtc is not null &&
+                   Math.Abs((lastSeenUtc.Value - lastOnlineUtc.Value).TotalSeconds) < 2;
+
+        if (!same)
+            lines.Add($"Last online: {FormatAbsRel(lastOnlineUtc)}");
+    }
+
+    return string.Join("\n", lines);
+}
+
+private static string FormatAbsRel(DateTime? utc)
+{
+    if (utc is null) return "—";
+
+    var local = DateTime.SpecifyKind(utc.Value, DateTimeKind.Utc).ToLocalTime();
+    var abs = local.ToString("MM-dd-yyyy HH:mm");
+    var rel = FormatRelative(local);
+
+    return $"{abs} ({rel})";
+}
+
+private static string FormatRelative(DateTime local)
+{
+    var delta = DateTime.Now - local;
+
+    if (delta.TotalSeconds < 60) return "just now";
+    if (delta.TotalMinutes < 60) return $"{(int)delta.TotalMinutes}m ago";
+    if (delta.TotalHours < 24) return $"{(int)delta.TotalHours}h ago";
+    return $"{(int)delta.TotalDays}d ago";
+}
+
+// -----------------------------
+// IP generation
+// -----------------------------
+private static List<uint> GetUsableIpUInts(IpCidr.CidrInfo info)
+{
+    if (info.PrefixLength == 32)
+        return new List<uint> { info.NetworkUInt };
+
+    if (info.PrefixLength == 31)
+        return new List<uint> { info.NetworkUInt, info.BroadcastUInt };
+
+    if (string.IsNullOrWhiteSpace(info.FirstUsable) || string.IsNullOrWhiteSpace(info.LastUsable))
+        return new List<uint>();
+
+    if (!IpCidr.TryParseIPv4(info.FirstUsable, out var start, out _))
+        return new List<uint>();
+
+    if (!IpCidr.TryParseIPv4(info.LastUsable, out var end, out _))
+        return new List<uint>();
+
+    if (end < start)
+        return new List<uint>();
+
+    var list = new List<uint>();
+    for (uint ip = start; ip <= end; ip++)
+    {
+        list.Add(ip);
+        if (ip == uint.MaxValue) break;
+    }
+
+    return list;
+}
+
+private enum IpViewMode { All, Used, Available, Reserved, Deprecated, Dhcp }
+private enum IpDisplayStatus { Available, Reserved, Dhcp, Deprecated, AssignedStatic, AssignedDhcp }
+
+private sealed class IpRow
+{
+    public uint IpUInt { get; set; }
+    public string Ip { get; set; } = "";
+    public List<Device> Devices { get; set; } = new();
+    public IpAssignment? Reservation { get; set; }
+    public bool IsUsed => Devices.Count > 0;
+}
+
+    private async Task OpenAddFromIp(bool isDevice, string ip)
+    {
+        var parameters = new DialogParameters
+        {
+            ["DevicesOnly"] = isDevice,
+            ["IpAddress"] = ip
+        };
+
+        var title = isDevice ? "Add Device" : "Add Client";
+        var dialog = DialogService.ShowStandard<AddDeviceDialog>(title, parameters);
+        var result = await dialog.Result;
+        if (!result.Canceled)
+            await LoadAsync();
+    }
+
+    private async Task OpenReservationDialogAsync(IpRow row)
+    {
+        var parameters = new DialogParameters
+        {
+            ["SubnetId"] = SubnetId,
+            ["IpAddress"] = row.Ip
+        };
+
+        var dialog = DialogService.ShowStandard<EditIpReservationDialog>(
+            "IP Reservation",
+            parameters,
+            maxWidth: MaxWidth.Small,
+            fullWidth: true);
+
+        var result = await dialog.Result;
+        if (!result.Canceled)
+            await LoadAsync();
+    }
+}

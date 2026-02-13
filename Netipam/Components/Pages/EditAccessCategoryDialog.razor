@@ -1,0 +1,94 @@
+@using MudBlazor
+@using Microsoft.EntityFrameworkCore
+@using Netipam.Data
+
+@inject AppDbContext DbContext
+
+<MudDialog>
+    <DialogContent>
+        @if (loading)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else if (category is null)
+        {
+            <MudAlert Severity="Severity.Error">Access category not found.</MudAlert>
+        }
+        else
+        {
+            <MudStack Spacing="2">
+                <MudTextField T="string"
+                              Label="Name"
+                              @bind-Value="category.Name"
+                              Required="true"
+                              RequiredError="Name is required."
+                              Disabled="@busy" />
+
+                <MudTextField T="string"
+                              Label="Description"
+                              @bind-Value="category.Description"
+                              Lines="2"
+                              Disabled="@busy" />
+            </MudStack>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Text"
+                   Color="Color.Secondary"
+                   OnClick="Cancel"
+                   Disabled="@busy">
+            Cancel
+        </MudButton>
+
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   OnClick="Save"
+                   Disabled="@((busy) || (loading) || (category is null))">
+            Save
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public int AccessCategoryId { get; set; }
+
+    private AccessCategory? category;
+    private bool loading = true;
+    private bool busy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        category = await DbContext.AccessCategories
+            .FirstOrDefaultAsync(c => c.Id == AccessCategoryId);
+        loading = false;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task Save()
+    {
+        if (category is null)
+            return;
+
+        if (busy) return;
+        busy = true;
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(category.Name))
+                return;
+
+            category.Name = category.Name.Trim();
+            category.Description = category.Description?.Trim();
+
+            await DbContext.SaveChangesAsync();
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+}

@@ -1,0 +1,166 @@
+﻿@using MudBlazor
+@using Microsoft.EntityFrameworkCore
+@using Netipam.Data
+
+@inject AppDbContext DbContext
+
+<MudDialog>
+    <DialogContent>
+        @if (loading)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else if (type is null)
+        {
+            <MudAlert Severity="Severity.Error">Client type not found.</MudAlert>
+        }
+        else
+        {
+            <MudForm @ref="form">
+                <MudStack Spacing="2">
+
+                    <MudTextField T="string"
+                                  Label="Name"
+                                  @bind-Value="type.Name"
+                                  Required="true"
+                                  RequiredError="Name is required."
+                                  Immediate="true"
+                                  Disabled="@busy" />
+
+                    <MudSelect T="string"
+                               Label="Icon (optional)"
+                               Dense="true"
+                               Clearable="true"
+                               @bind-Value="type.Icon"
+                               Disabled="@busy">
+                        @foreach (var opt in IconOptions)
+                        {
+                            <MudSelectItem T="string" Value="@opt.Icon">
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                    <MudIcon Icon="@opt.Icon" Size="Size.Small" />
+                                    <MudText Typo="Typo.body2">@opt.Label</MudText>
+                                </MudStack>
+                            </MudSelectItem>
+                        }
+                    </MudSelect>
+
+                    <MudSwitch T="bool"
+                               @bind-Value="type.IsDevice"
+                               Color="Color.Primary"
+                               Label="Is Device? (shows on Devices page later)"
+                               Disabled="@busy" />
+
+                    <MudSwitch T="bool"
+                               @bind-Value="type.IsHost"
+                               Color="Color.Primary"
+                               Label="Is Host? (can be selected as a host device)"
+                               Disabled="@busy" />
+
+                    <MudTextField T="string"
+                                  Label="Description"
+                                  @bind-Value="type.Description"
+                                  Lines="3"
+                                  Immediate="true"
+                                  Disabled="@busy" />
+
+                </MudStack>
+            </MudForm>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Text"
+                   Color="Color.Secondary"
+                   Disabled="@busy"
+                   OnClick="Cancel">
+            Cancel
+        </MudButton>
+
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   Disabled="@((type is null) || loading || busy)"
+                   OnClick="Save">
+            @if (busy)
+            {
+                <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="me-2" />
+                <span>Saving…</span>
+            }
+            else
+            {
+                <span>Save</span>
+            }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public int ClientTypeId { get; set; }
+
+    private MudForm? form;
+    private bool loading = true;
+    private bool busy;
+
+    private ClientType? type;
+    private static readonly List<IconOption> IconOptions = BuildIconOptions();
+
+    protected override async Task OnInitializedAsync()
+    {
+        type = await DbContext.ClientTypes.FirstOrDefaultAsync(t => t.Id == ClientTypeId);
+        loading = false;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task Save()
+    {
+        if (type is null || loading)
+            return;
+
+        if (form is not null)
+        {
+            await form.Validate();
+            if (!form.IsValid)
+                return;
+        }
+
+        if (busy) return;
+        busy = true;
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(type.Name))
+                return;
+
+            type.Name = type.Name.Trim();
+            type.Description = type.Description?.Trim();
+
+            await DbContext.SaveChangesAsync();
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private static List<IconOption> BuildIconOptions() => new()
+    {
+        new("Router/Gateway", Icons.Material.Filled.Router),
+        new("Switch", Icons.Material.Filled.SettingsEthernet),
+        new("Wireless AP", Icons.Material.Filled.Wifi),
+        new("Server", Icons.Material.Filled.Dns),
+        new("NAS/Storage", Icons.Material.Filled.Storage),
+        new("Camera", Icons.Material.Filled.Videocam),
+        new("NVR", Icons.Material.Filled.VideoLibrary),
+        new("PC", Icons.Material.Filled.Computer),
+        new("Laptop", Icons.Material.Filled.Laptop),
+        new("Phone", Icons.Material.Filled.PhoneIphone),
+        new("Tablet", Icons.Material.Filled.TabletMac),
+        new("Printer", Icons.Material.Filled.Print),
+        new("VM/Container", Icons.Material.Filled.Memory),
+        new("IoT/Device", Icons.Material.Filled.Devices),
+    };
+
+    private sealed record IconOption(string Label, string Icon);
+}

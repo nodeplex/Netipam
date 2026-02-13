@@ -1,0 +1,377 @@
+@page "/racks/view"
+@page "/racks/view/{RackId:int}"
+@rendermode InteractiveServer
+
+@using MudBlazor
+@using Microsoft.EntityFrameworkCore
+@using Netipam.Data
+
+@inject AppDbContext DbContext
+@inject NavigationManager Nav
+
+<MudStack Spacing="2">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                       Title="Back to Racks"
+                       OnClick="@(() => Nav.NavigateTo("/racks"))" />
+        <MudText Typo="Typo.h5">Rack View</MudText>
+        <MudSpacer />
+
+        <MudSelect T="int?" Dense="true" Label="Rack"
+                   @bind-Value="selectedRackId"
+                   @bind-Value:after="OnRackChanged">
+            @foreach (var r in racks)
+            {
+                <MudSelectItem T="int?" Value="@r.Id">@r.Name</MudSelectItem>
+            }
+        </MudSelect>
+    </MudStack>
+
+    @if (selectedRack is null)
+    {
+        <MudAlert Severity="Severity.Info" Dense="true">
+            Select a rack to view layout.
+        </MudAlert>
+    }
+    else
+    {
+        <MudText Typo="Typo.subtitle1">
+            @selectedRack.Name
+            @if (!string.IsNullOrWhiteSpace(selectedRack.LocationRef?.Name))
+            {
+                <span class="ml-1">(@selectedRack.LocationRef.Name)</span>
+            }
+            @if (selectedRack.RackUnits is not null)
+            {
+                <span class="ml-1">[@($"{selectedRack.RackUnits.Value}U")]</span>
+            }
+        </MudText>
+        @if (!string.IsNullOrWhiteSpace(selectedRack.Description))
+        {
+            <MudText Typo="Typo.caption">@selectedRack.Description</MudText>
+        }
+
+        <MudPaper Class="pa-2 rack-shell">
+            <div class="rack-view" style="@($"--rack-rows:{maxUnits};")">
+                <div class="rack-labels">
+                    @for (int u = maxUnits; u >= 1; u--)
+                    {
+                        <div class="rack-label">
+                            <span>@($"U{u}")</span>
+                        </div>
+                    }
+                </div>
+                <div class="rack-body">
+                    @for (int u = maxUnits; u >= 1; u--)
+                    {
+                        <div class="rack-row">
+                            @if (coveredUnits.Contains(u))
+                            {
+                                <span class="rack-cover-arrow">&#8599;</span>
+                            }
+                        </div>
+                    }
+
+                    @foreach (var block in blocks)
+                    {
+                        <div class="rack-block @(block.IsOverlap ? "overlap" : "")"
+                             style="@BlockStyle(block)">
+                        <div class="rack-block-header">
+                            <div class="rack-block-title">
+                                @if (block.HasLink && !string.IsNullOrWhiteSpace(block.Link))
+                                {
+                                    <MudLink Href="@block.Link"
+                                             Target="_blank"
+                                             Rel="noopener noreferrer"
+                                             Underline="Underline.Always"
+                                             Style="font-size:inherit; font-weight:600">
+                                        @block.Name
+                                    </MudLink>
+                                }
+                                else
+                                {
+                                    @block.Name
+                                }
+                                @if (!string.IsNullOrWhiteSpace(BuildMetaText(block)))
+                                {
+                                    <span class="rack-block-type"> - @BuildMetaText(block)</span>
+                                }
+                                <span class="rack-block-size">@($"{block.SizeU}U")</span>
+                            </div>
+                        </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        </MudPaper>
+
+        @if (unplaced.Count > 0)
+        {
+            <MudPaper Class="pa-2 mt-2">
+                <MudText Typo="Typo.subtitle2">Unplaced (missing U position/size)</MudText>
+                <MudList T="string" Dense="true">
+                    @foreach (var d in unplaced)
+                    {
+                        <MudListItem T="string">@d.Name</MudListItem>
+                    }
+                </MudList>
+            </MudPaper>
+        }
+    }
+</MudStack>
+
+<style>
+    .rack-shell {
+        background: var(--mud-palette-surface);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 8px;
+        overflow-x: auto;
+    }
+
+    .rack-view {
+        display: grid;
+        grid-template-columns: 54px minmax(360px, 1fr);
+        gap: 10px;
+        --rack-row-height: 30px;
+    }
+
+    .rack-labels {
+        display: grid;
+        grid-template-rows: repeat(var(--rack-rows), var(--rack-row-height));
+        align-items: center;
+        font-size: 0.8rem;
+        color: var(--mud-palette-text-secondary);
+    }
+
+    .rack-label {
+        height: var(--rack-row-height);
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 6px;
+        padding-right: 6px;
+        white-space: nowrap;
+    }
+
+    .rack-body {
+        position: relative;
+        display: grid;
+        grid-template-rows: repeat(var(--rack-rows), var(--rack-row-height));
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 6px;
+        background: var(--mud-palette-surface);
+        overflow: hidden;
+    }
+
+    .rack-row {
+        border-bottom: 1px dashed var(--mud-palette-divider);
+        display: flex;
+        align-items: center;
+        padding-left: 8px;
+        color: var(--mud-palette-text-secondary);
+    }
+
+    .rack-row:last-child {
+        border-bottom: none;
+    }
+
+    .rack-cover-arrow {
+        font-size: 0.85rem;
+        line-height: 1;
+        margin-left: 4px;
+    }
+
+    .rack-block {
+        position: absolute;
+        left: 6px;
+        right: 6px;
+        background: var(--mud-palette-background-grey);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 6px;
+        padding: 6px 8px;
+        overflow: hidden;
+    }
+
+    .rack-block.overlap {
+        border-color: #c62828;
+        background: rgba(198, 40, 40, 0.15);
+    }
+
+    .rack-block-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        justify-content: space-between;
+    }
+
+    .rack-block-title {
+        font-size: 0.9rem;
+        font-weight: 600;
+        line-height: 1.15;
+        display: inline-flex;
+        align-items: baseline;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+
+    .rack-block-type {
+        font-size: 0.8rem;
+        font-weight: 500;
+        color: var(--mud-palette-text-secondary);
+    }
+
+    .rack-block-size {
+        font-size: 0.7rem;
+        font-weight: 600;
+        color: var(--mud-palette-text-secondary);
+        border: 1px solid var(--mud-palette-divider);
+        border-radius: 999px;
+        padding: 1px 6px;
+        margin-left: 6px;
+        white-space: nowrap;
+    }
+
+</style>
+
+@code {
+    [Parameter] public int? RackId { get; set; }
+
+    private const int DefaultRackUnits = 42;
+
+    private List<Rack> racks = new();
+    private Rack? selectedRack;
+    private int? selectedRackId;
+
+    private List<RackBlock> blocks = new();
+    private List<Device> unplaced = new();
+    private int maxUnits = DefaultRackUnits;
+    private HashSet<int> coveredUnits = new();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        racks = await DbContext.Racks
+            .AsNoTracking()
+            .OrderBy(r => r.Name)
+            .ToListAsync();
+
+        if (RackId.HasValue)
+            selectedRackId = RackId;
+        else if (selectedRackId is null && racks.Count > 0)
+            selectedRackId = racks[0].Id;
+
+        await LoadRackAsync();
+    }
+
+    private async Task OnRackChanged()
+        => await LoadRackAsync();
+
+    private async Task LoadRackAsync()
+    {
+        if (selectedRackId is null)
+        {
+            selectedRack = null;
+            blocks = new();
+            unplaced = new();
+            return;
+        }
+
+        selectedRack = await DbContext.Racks
+            .AsNoTracking()
+            .Include(r => r.LocationRef)
+            .FirstOrDefaultAsync(r => r.Id == selectedRackId.Value);
+
+        if (selectedRack is null)
+        {
+            blocks = new();
+            unplaced = new();
+            return;
+        }
+
+        var devices = await DbContext.Devices
+            .AsNoTracking()
+            .Include(d => d.ClientType)
+            .Where(d => d.RackId == selectedRackId.Value)
+            .OrderBy(d => d.Name)
+            .ToListAsync();
+
+        unplaced = devices
+            .Where(d => d.RackUPosition is null || d.RackUSize is null)
+            .ToList();
+
+        var placed = devices
+            .Where(d => d.RackUPosition is not null && d.RackUSize is not null)
+            .ToList();
+
+        var occupancy = new Dictionary<int, int>();
+        foreach (var d in placed)
+        {
+            var start = d.RackUPosition!.Value;
+            var size = Math.Max(1, d.RackUSize!.Value);
+            for (int u = start; u < start + size; u++)
+            {
+                occupancy[u] = occupancy.TryGetValue(u, out var count) ? count + 1 : 1;
+            }
+        }
+
+        blocks = placed.Select(d =>
+        {
+            var start = d.RackUPosition!.Value;
+            var size = Math.Max(1, d.RackUSize!.Value);
+            var isOverlap = Enumerable.Range(start, size).Any(u => occupancy.TryGetValue(u, out var count) && count > 1);
+            return new RackBlock
+            {
+                Name = d.Name,
+                TypeName = d.ClientType?.Name ?? "",
+                Manufacturer = d.Manufacturer,
+                Model = d.Model,
+                Link = TryBuildAccessLink(d.AccessLink, out var href) ? href : null,
+                HasLink = TryBuildAccessLink(d.AccessLink, out _),
+                StartU = start,
+                SizeU = size,
+                IsOverlap = isOverlap
+            };
+        }).ToList();
+
+        coveredUnits = new HashSet<int>(
+            blocks.SelectMany(b => Enumerable.Range(b.StartU, Math.Max(0, b.SizeU - 1))));
+
+        var maxUsed = blocks.Count == 0 ? 0 : blocks.Max(b => b.StartU + b.SizeU - 1);
+        var desiredUnits = selectedRack.RackUnits ?? DefaultRackUnits;
+        maxUnits = Math.Max(desiredUnits, maxUsed);
+    }
+
+    private const int RowHeight = 30;
+
+    private string BlockStyle(RackBlock block)
+    {
+        var bottom = (block.StartU - 1) * RowHeight;
+        var height = block.SizeU * RowHeight;
+        return $"bottom:{bottom}px; height:{height}px;";
+    }
+
+    private sealed class RackBlock
+    {
+        public string Name { get; set; } = "";
+        public string TypeName { get; set; } = "";
+        public string? Manufacturer { get; set; }
+        public string? Model { get; set; }
+        public string? Link { get; set; }
+        public bool HasLink { get; set; }
+        public int StartU { get; set; }
+        public int SizeU { get; set; }
+        public bool IsOverlap { get; set; }
+    }
+
+    private static string BuildMetaText(RackBlock block)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(block.TypeName))
+            parts.Add(block.TypeName);
+        if (!string.IsNullOrWhiteSpace(block.Manufacturer))
+            parts.Add(block.Manufacturer);
+        if (!string.IsNullOrWhiteSpace(block.Model))
+            parts.Add(block.Model);
+        return string.Join(" - ", parts);
+    }
+
+}

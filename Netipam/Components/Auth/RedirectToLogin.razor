@@ -1,0 +1,24 @@
+﻿@using Microsoft.AspNetCore.Components
+@inject NavigationManager Nav
+
+@code {
+    protected override void OnInitialized()
+    {
+        var relative = "/" + Nav.ToBaseRelativePath(Nav.Uri);
+
+        // If already on login, do nothing (prevents redirect loops)
+        if (relative.Equals("/login", StringComparison.OrdinalIgnoreCase) ||
+            relative.StartsWith("/login?", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        var returnUrl = Uri.EscapeDataString(relative);
+        Nav.NavigateTo($"/login?returnUrl={returnUrl}", replace: true);
+    }
+}
+
+
+
+
+

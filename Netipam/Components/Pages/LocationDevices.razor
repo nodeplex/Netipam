@@ -1,0 +1,168 @@
+@page "/locations/{LocationId:int}/devices"
+@rendermode InteractiveServer
+
+@using MudBlazor
+@using Microsoft.EntityFrameworkCore
+@using Netipam.Data
+
+@inject AppDbContext DbContext
+@inject NavigationManager Nav
+
+<MudStack Spacing="2">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                       Title="Back to Locations"
+                       OnClick="@(() => Nav.NavigateTo("/locations"))" />
+
+        <MudText Typo="Typo.h5">
+            @(locationName is null ? "Location Devices" : $"Location: {locationName}")
+        </MudText>
+
+        <MudSpacer />
+
+        <MudTextField T="string"
+                      Dense="true"
+                      Placeholder="Search (name, type, hostname, IP, subnet, MAC...)"
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Filled.Search"
+                      Immediate="true"
+                      Style="min-width: 320px;"
+                      @bind-Value="search" />
+    </MudStack>
+
+    @if (!string.IsNullOrWhiteSpace(error))
+    {
+        <MudAlert Severity="Severity.Error" Dense="true">@error</MudAlert>
+    }
+
+    <MudTable T="Device"
+              Items="@Filtered"
+              Dense="true"
+              Hover="true"
+              Bordered="true"
+              Striped="true">
+        <HeaderContent>
+            <MudTh style="width:28px;"></MudTh>
+            <MudTh>Name</MudTh>
+            <MudTh>Type</MudTh>
+            <MudTh>Hostname</MudTh>
+            <MudTh>IP</MudTh>
+            <MudTh>Subnet</MudTh>
+            <MudTh>MAC</MudTh>
+        </HeaderContent>
+
+        <RowTemplate Context="d">
+            <MudTd DataLabel="Status">
+                <MudIcon Icon="@Icons.Material.Filled.Circle"
+                         Color="@(d.IsStatusTracked ? (d.IsOnline ? Color.Success : Color.Error) : Color.Default)"
+                         Size="Size.Small" />
+            </MudTd>
+
+            <MudTd DataLabel="Name">
+                @if (TryBuildAccessLink(d.AccessLink, out var accessHref))
+                {
+                    <MudLink Href="@accessHref"
+                             Target="_blank"
+                             Rel="noopener noreferrer"
+                             Underline="Underline.Always"
+                             Style="font-size:inherit; font-weight:600">
+                        @d.Name
+                    </MudLink>
+                }
+                else
+                {
+                    @d.Name
+                }
+            </MudTd>
+            <MudTd DataLabel="Type">@d.ClientType?.Name</MudTd>
+            <MudTd DataLabel="Hostname">@Safe(d.Hostname)</MudTd>
+            <MudTd DataLabel="IP">@Safe(d.IpAddress)</MudTd>
+            <MudTd DataLabel="Subnet">
+                @if (d.Subnet is not null)
+                {
+                    <MudLink Href="@($"/subnets/{d.Subnet.Id}/ips")"
+                             Underline="Underline.Always"
+                             Style="font-size:inherit; font-weight:600">
+                        @d.Subnet.Name
+                    </MudLink>
+                }
+                else
+                {
+                    <span>-</span>
+                }
+            </MudTd>
+            <MudTd DataLabel="MAC">@Safe(d.MacAddress)</MudTd>
+        </RowTemplate>
+
+        <NoRecordsContent>
+            <MudText Typo="Typo.body2" Class="pa-4">No devices assigned to this location.</MudText>
+        </NoRecordsContent>
+    </MudTable>
+</MudStack>
+
+@code {
+    [Parameter] public int LocationId { get; set; }
+
+    private string? locationName;
+    private string? error;
+    private string? search;
+    private List<Device> rows = new();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        error = null;
+        locationName = await DbContext.Locations
+            .AsNoTracking()
+            .Where(l => l.Id == LocationId)
+            .Select(l => l.Name)
+            .FirstOrDefaultAsync();
+
+        if (string.IsNullOrWhiteSpace(locationName))
+        {
+            error = "Location not found.";
+            rows = new();
+            return;
+        }
+
+        var nameLower = locationName.ToLowerInvariant();
+
+        rows = await DbContext.Devices
+            .AsNoTracking()
+            .Include(d => d.Subnet)
+            .Include(d => d.ClientType)
+            .Where(d =>
+                d.LocationId == LocationId ||
+                (d.LocationId == null &&
+                 !string.IsNullOrWhiteSpace(d.Location) &&
+                 d.Location!.ToLower() == nameLower))
+            .OrderBy(d => d.Name)
+            .ToListAsync();
+    }
+
+    private IEnumerable<Device> Filtered
+    {
+        get
+        {
+            IEnumerable<Device> q = rows;
+
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                var s = search.Trim();
+                q = q.Where(d =>
+                    Contains(d.Name, s) ||
+                    Contains(d.ClientType?.Name, s) ||
+                    Contains(d.Hostname, s) ||
+                    Contains(d.IpAddress, s) ||
+                    Contains(d.MacAddress, s) ||
+                    Contains(d.Subnet?.Name, s));
+            }
+
+            return q;
+        }
+    }
+
+    private static bool Contains(string? haystack, string needle)
+        => !string.IsNullOrWhiteSpace(haystack)
+           && haystack.Contains(needle, StringComparison.OrdinalIgnoreCase);
+
+}

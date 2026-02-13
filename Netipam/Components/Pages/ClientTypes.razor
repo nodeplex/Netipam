@@ -1,0 +1,162 @@
+﻿@page "/client-types"
+@using MudBlazor
+@using Microsoft.EntityFrameworkCore
+@using Netipam.Data
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject AppDbContext DbContext
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject AuthenticationStateProvider AuthStateProvider
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mb-3">
+    <MudText Typo="Typo.h5">Client Types</MudText>
+    <MudSpacer />
+    @if (_canEdit)
+    {
+        <MudIconButton Icon="@Icons.Material.Filled.AddBox"
+                       Title="Add Client Type"
+                       Size="Size.Medium"
+                       Class="toolbar-button download-icon-btn add-icon"
+                       OnClick="OpenAdd" />
+    }
+</MudStack>
+
+<style>
+    .download-icon-btn {
+        height: 26px;
+        width: 26px;
+        padding: 0;
+    }
+
+    .add-icon {
+        margin-right: 20px;
+    }
+</style>
+
+<MudTable T="ClientType" Items="@types" Dense="true" Hover="true" Bordered="true" Striped="true">
+    <HeaderContent>
+        <MudTh>Name</MudTh>
+        <MudTh>Is Device?</MudTh>
+        <MudTh>Is Host?</MudTh>
+        <MudTh>Description</MudTh>
+        @if (_canEdit)
+        {
+            <MudTh style="width:120px;"></MudTh>
+        }
+    </HeaderContent>
+
+    <RowTemplate Context="t">
+        <MudTd DataLabel="Name">@t.Name</MudTd>
+
+        <MudTd DataLabel="Is Device?">
+            @if (t.IsDevice)
+            {
+                <MudChip T="string" Color="Color.Success" Variant="Variant.Filled" Size="Size.Small">Yes</MudChip>
+            }
+            else
+            {
+                <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small">No</MudChip>
+            }
+        </MudTd>
+
+        <MudTd DataLabel="Is Host?">
+            @if (t.IsHost)
+            {
+                <MudChip T="string" Color="Color.Success" Variant="Variant.Filled" Size="Size.Small">Yes</MudChip>
+            }
+            else
+            {
+                <MudChip T="string" Color="Color.Default" Variant="Variant.Outlined" Size="Size.Small">No</MudChip>
+            }
+        </MudTd>
+
+        <MudTd DataLabel="Description">@t.Description</MudTd>
+
+        @if (_canEdit)
+        {
+            <MudTd DataLabel="Actions">
+                <MudIconButton Icon="@Icons.Material.Filled.Edit" Color="Color.Primary" Size="Size.Small"
+                               OnClick="@(() => OpenEdit(t.Id))" />
+                <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" Size="Size.Small"
+                               OnClick="@(() => ConfirmDelete(t.Id))" />
+            </MudTd>
+        }
+    </RowTemplate>
+
+    <NoRecordsContent>
+        <MudText Typo="Typo.body2" Class="pa-4">No client types yet.</MudText>
+    </NoRecordsContent>
+</MudTable>
+
+@code {
+    private List<ClientType> types = new();
+    private bool _canEdit = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        _canEdit = !authState.User.IsInRole("Viewer");
+
+        await Reload();
+    }
+
+    private async Task Reload()
+    {
+        types = await DbContext.ClientTypes
+            .AsNoTracking()
+            .OrderBy(t => t.Name)
+            .ToListAsync();
+    }
+
+    private async Task OpenAdd()
+    {
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = DialogService.Show<AddClientTypeDialog>("Add Client Type", options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+            await Reload();
+    }
+
+    private async Task OpenEdit(int id)
+    {
+        var parameters = new DialogParameters { ["ClientTypeId"] = id };
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true };
+        var dialog = DialogService.Show<EditClientTypeDialog>("Edit Client Type", parameters, options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+            await Reload();
+    }
+
+    private async Task ConfirmDelete(int id)
+    {
+        // Simple protection: block delete if any clients use it
+        var inUse = await DbContext.Devices.AsNoTracking().AnyAsync(d => d.ClientTypeId == id);
+        if (inUse)
+        {
+            Snackbar.Add("Cannot delete: this type is assigned to one or more clients.", Severity.Warning);
+            return;
+        }
+
+        var confirm = await DialogService.ShowMessageBox(
+            title: "Delete client type?",
+            message: "Are you sure you want to delete this client type?",
+            yesText: "Delete",
+            cancelText: "Cancel");
+
+        if (confirm != true)
+            return;
+
+        var entity = await DbContext.ClientTypes.FirstOrDefaultAsync(t => t.Id == id);
+        if (entity is null)
+            return;
+
+        DbContext.ClientTypes.Remove(entity);
+        await DbContext.SaveChangesAsync();
+
+        Snackbar.Add("Client type deleted.", Severity.Success);
+        await Reload();
+    }
+}

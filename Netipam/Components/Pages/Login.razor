@@ -1,0 +1,83 @@
+﻿@page "/login"
+@layout Layout.AuthLayout
+@attribute [AllowAnonymous]
+@rendermode InteractiveServer
+
+@using Microsoft.AspNetCore.Components
+@using Microsoft.AspNetCore.Components.Routing
+@using MudBlazor
+@using Microsoft.AspNetCore.Authorization
+
+@inject NavigationManager Nav
+
+<MudContainer MaxWidth="MaxWidth.ExtraSmall" Class="mt-10">
+    <MudPaper Elevation="3" Class="pa-6">
+        <MudStack Spacing="2">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                <MudIcon Icon="@Icons.Material.Filled.Lock" Color="Color.Primary" />
+                <MudText Typo="Typo.h5">Sign in</MudText>
+            </MudStack>
+            <MudText Typo="Typo.caption">Access your Netipam dashboard</MudText>
+
+            <form method="post" action="/auth/login">
+                <MudTextField T="string"
+                              Label="Username"
+                              Name="username"
+                              Immediate="true"
+                              FullWidth="true"
+                              AutoFocus="true"
+                              Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Filled.Person" />
+
+                <MudTextField T="string"
+                              Label="Password"
+                              Name="password"
+                              InputType="InputType.Password"
+                              Immediate="true"
+                              FullWidth="true"
+                              Class="mt-3"
+                              Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Filled.Lock" />
+
+                <MudCheckBox Label="Remember me"
+                             Class="mt-2"
+                             @bind-Value="_rememberMe" />
+
+                <input type="hidden" name="rememberMe" value="@(_rememberMe ? "true" : "false")" />
+                <input type="hidden" name="returnUrl" value="@ReturnUrl" />
+
+                <MudStack Row="true" Spacing="2" Class="mt-4">
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               ButtonType="ButtonType.Submit">
+                        Login
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Text"
+                               OnClick="@(() => Nav.NavigateTo("/"))">
+                        Cancel
+                    </MudButton>
+                </MudStack>
+
+                @if (ShowError)
+                {
+                    <MudAlert Severity="Severity.Error" Dense="true" Class="mt-4">
+                        Invalid username or password.
+                    </MudAlert>
+                }
+            </form>
+        </MudStack>
+    </MudPaper>
+</MudContainer>
+
+@code {
+    private bool _rememberMe = true;
+
+    [SupplyParameterFromQuery(Name = "returnUrl")]
+    public string? ReturnUrl { get; set; } = "/";
+
+    [SupplyParameterFromQuery(Name = "error")]
+    public string? Error { get; set; }
+
+    private bool ShowError => Error == "1";
+}

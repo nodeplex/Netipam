@@ -1,0 +1,130 @@
+@using MudBlazor
+@using Microsoft.EntityFrameworkCore
+@using Netipam.Data
+
+@inject AppDbContext DbContext
+
+<MudDialog>
+    <DialogContent>
+        @if (loading)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else if (rack is null)
+        {
+            <MudAlert Severity="Severity.Error">Rack not found.</MudAlert>
+        }
+        else
+        {
+            <MudForm @ref="form">
+                <MudStack Spacing="2">
+                    <MudTextField T="string"
+                                  Label="Name"
+                                  @bind-Value="rack.Name"
+                                  Required="true"
+                                  RequiredError="Name is required."
+                                  Immediate="true"
+                                  Disabled="@busy" />
+
+                    <MudSelect T="int?"
+                               Label="Location"
+                               @bind-Value="rack.LocationId"
+                               Clearable="true"
+                               Disabled="@busy">
+                        @foreach (var l in locations)
+                        {
+                            <MudSelectItem T="int?" Value="@l.Id">@l.Name</MudSelectItem>
+                        }
+                    </MudSelect>
+
+                    <MudTextField T="string"
+                                  Label="Description"
+                                  @bind-Value="rack.Description"
+                                  Lines="3"
+                                  Immediate="true"
+                                  Disabled="@busy" />
+
+                    <MudNumericField T="int?"
+                                     Label="Rack Size (U)"
+                                     @bind-Value="rack.RackUnits"
+                                     Min="1"
+                                     HelperText="Leave blank for default size."
+                                     Disabled="@busy" />
+                </MudStack>
+            </MudForm>
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton Variant="Variant.Text"
+                   Color="Color.Secondary"
+                   Disabled="@busy"
+                   OnClick="Cancel">
+            Cancel
+        </MudButton>
+
+        <MudButton Variant="Variant.Filled"
+                   Color="Color.Primary"
+                   Disabled="@((rack is null) || loading || busy)"
+                   OnClick="Save">
+            Save
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public int RackId { get; set; }
+
+    private MudForm? form;
+    private bool loading = true;
+    private bool busy;
+
+    private Rack? rack;
+    private List<Location> locations = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        locations = await DbContext.Locations
+            .AsNoTracking()
+            .OrderBy(l => l.Name)
+            .ToListAsync();
+
+        rack = await DbContext.Racks.FirstOrDefaultAsync(r => r.Id == RackId);
+        loading = false;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+
+    private async Task Save()
+    {
+        if (rack is null || loading)
+            return;
+
+        if (form is not null)
+        {
+            await form.Validate();
+            if (!form.IsValid)
+                return;
+        }
+
+        if (busy) return;
+        busy = true;
+
+        try
+        {
+            if (string.IsNullOrWhiteSpace(rack.Name))
+                return;
+
+            rack.Name = rack.Name.Trim();
+            rack.Description = rack.Description?.Trim();
+
+            await DbContext.SaveChangesAsync();
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+}

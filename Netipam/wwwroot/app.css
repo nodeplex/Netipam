@@ -1,0 +1,34 @@
+html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+}
+
+/* Don’t let template layout CSS interfere */
+body {
+    display: block;
+}
+
+/* Your compact table font tweak */
+.mud-table-cell {
+    font-size: 0.75rem !important;
+}
+
+.mud-table-header .mud-table-cell {
+    font-size: 0.8rem !important;
+}
+
+/* Dark mode table zebra striping - slightly darker */
+.mud-theme-dark .mud-table-row-striped {
+    background-color: rgb(255,255,255,0.10);
+}
+
+.mud-theme-dark tr {
+    outline: 2px solid red !important;
+}
+/* Dark mode zebra striping - broad match * test/
+.mud-theme-dark .mud-table-root .mud-table-body .mud-table-row:nth-of-type(even),
+.mud-theme-dark .mud-table-root .mud-table-body .mud-table-row-striped {
+    background-color: rgba(255, 255, 255, 0.08) !important;
+}

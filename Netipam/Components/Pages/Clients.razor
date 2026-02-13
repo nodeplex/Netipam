@@ -1,0 +1,978 @@
+@page "/clients"
+@rendermode InteractiveServer
+
+@using MudBlazor
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.EntityFrameworkCore
+@using Netipam.Data
+@using Netipam.Services
+@using System.Security.Claims
+
+@implements IDisposable
+
+@inject AppDbContext DbContext
+@inject IDialogService DialogService
+@inject ISnackbar Snackbar
+@inject AppSettingsService SettingsService
+@inject AuthenticationStateProvider AuthStateProvider
+@inject NavigationManager Nav
+@inject UiSessionStateService UiSessionState
+
+<MudStack Row="true" Spacing="2" AlignItems="AlignItems.End" Class="mb-3">
+    <MudText Typo="Typo.h6">Clients</MudText>
+
+    <MudSpacer />
+
+    <MudCheckBox T="bool" Dense="true" Label="Online" @bind-Value="showOnline" />
+    <MudCheckBox T="bool" Dense="true" Label="Offline" @bind-Value="showOffline" />
+    <MudCheckBox T="bool" Dense="true" Label="Hide ignored" @bind-Value="hideIgnored" />
+    <MudCheckBox T="bool" Dense="true" Label="Hide DHCP" @bind-Value="hideDhcp" />
+
+    <MudSelect T="int?" Placeholder="Type" Dense="true" Style="min-width: 220px;" Class="page-filter"
+               @bind-Value="selectedTypeId" Clearable="true">
+        <MudSelectItem T="int?" Value="@(UnassignedSentinel)">Unassigned</MudSelectItem>
+        @foreach (var t in clientTypes)
+        {
+            <MudSelectItem T="int?" Value="@t.Id">@t.Name</MudSelectItem>
+        }
+    </MudSelect>
+
+    <MudSelect T="int?" Placeholder="Location" Dense="true" Style="min-width: 220px;" Class="page-filter"
+               @bind-Value="selectedLocationId" Clearable="true">
+        <MudSelectItem T="int?" Value="@(UnassignedLocationSentinel)">Unassigned</MudSelectItem>
+        @foreach (var l in locations)
+        {
+            <MudSelectItem T="int?" Value="@l.Id">@l.Name</MudSelectItem>
+        }
+    </MudSelect>
+
+    <MudSelect T="int?" Placeholder="Subnet" Dense="true" Style="min-width: 220px;" Class="page-filter"
+               @bind-Value="selectedSubnetId" Clearable="true">
+        <MudSelectItem T="int?" Value="@(UnassignedSubnetSentinel)">Unassigned</MudSelectItem>
+        @foreach (var s in subnets)
+        {
+            <MudSelectItem T="int?" Value="@s.Id">@s.Name</MudSelectItem>
+        }
+    </MudSelect>
+
+    <MudTextField T="string"
+                  Placeholder="Search (name, IP, subnet, MAC, hostname...)"
+                  Adornment="Adornment.Start"
+                  AdornmentIcon="@Icons.Material.Filled.Search"
+                  Immediate="true"
+                  Class="ms-2 me-2 page-filter"
+                  @bind-Value="search" />
+
+    <MudIconButton Icon="@Icons.Material.Filled.ViewColumn"
+                   Title="Column Selector"
+                   Size="Size.Medium"
+                   Class="toolbar-button download-icon-btn"
+                   OnClick="OpenColumnPicker" />
+
+    @if (_canEdit)
+    {
+        <MudMenu Dense="true" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Class="add-menu">
+            <ActivatorContent>
+                <MudIconButton Icon="@Icons.Material.Filled.AddBox"
+                               Title="Add"
+                               Size="Size.Medium"
+                               Class="toolbar-button download-icon-btn" />
+            </ActivatorContent>
+            <ChildContent>
+                <MudMenuItem OnClick="OpenAddClientDialog">Add Client</MudMenuItem>
+                <MudMenuItem OnClick="OpenAddDeviceDialog">Add Device</MudMenuItem>
+            </ChildContent>
+        </MudMenu>
+    }
+
+    <MudMenu Dense="true" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Class="download-menu">
+        <ActivatorContent>
+            <MudIconButton Icon="@Icons.Material.Filled.Download"
+                           Title="Downloads"
+                           Size="Size.Medium"
+                           Class="toolbar-button download-icon-btn" />
+        </ActivatorContent>
+        <ChildContent>
+            <MudMenuItem Href="/export/clients.xlsx">Export Clients</MudMenuItem>
+            <MudMenuItem Href="/export/all.xlsx">Export All</MudMenuItem>
+        </ChildContent>
+    </MudMenu>
+</MudStack>
+
+<style>
+    .mud-table-cell {
+        padding: 3px 6px !important; /* Adjust vertical (3px) and horizontal (6px) padding as needed */
+    }
+
+    /* Optional: Target the table header cells for consistent spacing */
+    .mud-table-head .mud-table-cell {
+        padding: 3px 6px !important;
+    }
+
+    .toolbar-button {
+        flex: 0 0 auto;
+        white-space: nowrap;
+    }
+
+    .toolbar-button .mud-button-label {
+        white-space: nowrap;
+    }
+
+    .download-icon-btn {
+        height: 26px;
+        width: 26px;
+        padding: 0;
+    }
+
+    .download-menu {
+        display: flex;
+        align-self: flex-end;
+        margin-right: 20px;
+    }
+
+    .add-menu {
+        display: flex;
+        align-self: flex-end;
+    }
+
+    .page-filter .mud-input-root,
+    .page-filter .mud-input-slot {
+        min-height: 26px;
+        height: 26px;
+    }
+    .page-filter .mud-input-slot {
+        display: flex;
+        align-items: center;
+    }
+
+</style>
+
+<MudTable T="Device"
+          Items="@FilteredClients"
+          FixedHeader="true"
+          Height="calc(100vh - 130px)"
+          Dense ="true"
+          Hover="true"
+          Bordered="true"
+          Striped="true">
+
+    <HeaderContent>
+        @if (ShowColumn("Status"))
+        {
+            <MudTh style="width:28px;"></MudTh>
+        }
+        @if (ShowColumn("Name"))
+        {
+            <MudTh>Name</MudTh>
+        }
+        @if (ShowColumn("Type"))
+        {
+            <MudTh>Type</MudTh>
+        }
+        @if (ShowColumn("Hostname"))
+        {
+            <MudTh>Hostname</MudTh>
+        }
+        @if (ShowColumn("IP"))
+        {
+            <MudTh>
+                <MudTableSortLabel SortBy="@(new Func<Device, object>(d => IpSortKey(d.IpAddress)))">
+                    IP
+                </MudTableSortLabel>
+            </MudTh>
+        }
+        @if (ShowColumn("Subnet"))
+        {
+            <MudTh>Subnet</MudTh>
+        }
+        @if (ShowColumn("MAC"))
+        {
+            <MudTh>MAC</MudTh>
+        }
+        @if (ShowColumn("Conn"))
+        {
+            <MudTh style="width:54px;">Conn</MudTh>
+        }
+        @if (ShowColumn("Upstream"))
+        {
+            <MudTh>Upstream</MudTh>
+        }
+        @if (ShowColumn("Host"))
+        {
+            <MudTh>Host</MudTh>
+        }
+        @if (ShowColumn("Location"))
+        {
+            <MudTh>Location</MudTh>
+        }
+        @if (ShowColumn("Rack"))
+        {
+            <MudTh>Rack</MudTh>
+        }
+        @if (ShowColumn("Manufacturer"))
+        {
+            <MudTh>Manufacturer</MudTh>
+        }
+        @if (ShowColumn("Model"))
+        {
+            <MudTh>Model</MudTh>
+        }
+        @if (ShowColumn("OS"))
+        {
+            <MudTh>OS</MudTh>
+        }
+        @if (ShowColumn("Actions"))
+        {
+            <MudTh style="width:105px;"></MudTh>
+        }
+    </HeaderContent>
+
+    <RowTemplate Context="c">
+        @if (ShowColumn("Status"))
+        {
+            <MudTd DataLabel="Status">
+                @if (showLastSeenTooltips)
+                {
+                    <MudTooltip Text="@GetStatusTooltip(c)">
+                        <MudIcon Icon="@Icons.Material.Filled.Circle"
+                                 Color="@(c.IsStatusTracked ? (c.IsOnline ? Color.Success : Color.Error) : Color.Default)"
+                                 Size="Size.Small"
+                                 Style="font-size:12px;" />
+                    </MudTooltip>
+                }
+                else
+                {
+                    <MudIcon Icon="@Icons.Material.Filled.Circle"
+                             Color="@(c.IsStatusTracked ? (c.IsOnline ? Color.Success : Color.Error) : Color.Default)"
+                             Size="Size.Small"
+                             Style="font-size:12px;" />
+                }
+            </MudTd>
+        }
+
+        @if (ShowColumn("Name"))
+        {
+            <MudTd DataLabel="Name">
+                @if (TryBuildAccessLink(c.AccessLink, out var accessHref))
+                {
+                    <MudLink Href="@accessHref"
+                             Target="_blank"
+                             Rel="noopener noreferrer"
+                             Underline="Underline.Always"
+                             Style="font-size:inherit; font-weight:600">
+                        @c.Name
+                    </MudLink>
+                }
+                else
+                {
+                    @c.Name
+                }
+            </MudTd>
+        }
+        @if (ShowColumn("Type"))
+        {
+            <MudTd DataLabel="Type">@c.ClientType?.Name</MudTd>
+        }
+        @if (ShowColumn("Hostname"))
+        {
+            <MudTd DataLabel="Hostname">@c.Hostname</MudTd>
+        }
+        @if (ShowColumn("IP"))
+        {
+            <MudTd DataLabel="IP">
+                @if (TryGetIpDisplay(c, out var ipDisplay, out var ipTooltip))
+                {
+                    <MudTooltip Text="@ipTooltip">
+                        <span>@ipDisplay</span>
+                    </MudTooltip>
+                }
+                else
+                {
+                    <span>@c.IpAddress</span>
+                }
+            </MudTd>
+        }
+        @if (ShowColumn("Subnet"))
+        {
+            <MudTd DataLabel="Subnet">
+                @if (c.Subnet is not null)
+                {
+                    <MudLink Href="@($"/subnets/{c.Subnet.Id}/ips")"
+                             Underline="Underline.Always"
+                             Style="font-size:inherit; font-weight:600">
+                        @c.Subnet.Name
+                    </MudLink>
+                }
+                else
+                {
+                    <span>-</span>
+                }
+            </MudTd>
+        }
+        @if (ShowColumn("MAC"))
+        {
+            <MudTd DataLabel="MAC">@c.MacAddress</MudTd>
+        }
+
+        @{
+            var upstreamName = c.HostDevice?.Name ?? c.UpstreamDeviceName;
+            var upstreamConn = c.HostDevice is not null ? "Hosted" : c.UpstreamConnection;
+            var connDetail = upstreamConn ?? c.ConnectionDetail;
+            var upstreamDisplay = BuildUpstreamDisplay(upstreamName, upstreamConn, c.ConnectionDetail);
+        }
+
+        @if (ShowColumn("Conn"))
+        {
+            <MudTd DataLabel="Conn" Align="Align.Center" Style="text-align:center;">
+                @if (!string.IsNullOrWhiteSpace(c.ConnectionType))
+                {
+                    <MudTooltip Text="@GetConnTooltip(c)">
+                        <MudIcon Icon="@(IsWifi(c.ConnectionType) ? Icons.Material.Filled.Wifi : Icons.Material.Filled.SettingsEthernet)"
+                                 Color="@(IsWifi(c.ConnectionType) ? GetWifiColor(connDetail) : Color.Default)"
+                                 Size="Size.Small" />
+                    </MudTooltip>
+                }
+            </MudTd>
+        }
+
+        @if (ShowColumn("Upstream"))
+        {
+            <MudTd DataLabel="Upstream">
+                <MudText Style="font-weight:600; font-size:inherit">@Safe(upstreamDisplay)</MudText>
+            </MudTd>
+        }
+
+        @if (ShowColumn("Host"))
+        {
+            <MudTd DataLabel="Host">@c.HostDevice?.Name</MudTd>
+        }
+        @if (ShowColumn("Location"))
+        {
+            <MudTd DataLabel="Location">@((c.LocationRef?.Name ?? c.Location) ?? "")</MudTd>
+        }
+        @if (ShowColumn("Rack"))
+        {
+            <MudTd DataLabel="Rack">@FormatRack(c)</MudTd>
+        }
+        @if (ShowColumn("Manufacturer"))
+        {
+            <MudTd DataLabel="Manufacturer">@c.Manufacturer</MudTd>
+        }
+        @if (ShowColumn("Model"))
+        {
+            <MudTd DataLabel="Model">@c.Model</MudTd>
+        }
+        @if (ShowColumn("OS"))
+        {
+            <MudTd DataLabel="OS">@c.OperatingSystem</MudTd>
+        }
+
+        @if (ShowColumn("Actions"))
+        {
+            <MudTd DataLabel="Actions">
+                @if (_canEdit)
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                   Color="Color.Info"
+                                   Size="Size.Small"
+                                   Title="Edit"
+                                   OnClick="@(() => OpenEditDialog(c))" />
+                }
+
+                <MudIconButton Icon="@Icons.Material.Filled.History"
+                               Color="Color.Primary"
+                               Size="Size.Small"
+                               Title="History"
+                               OnClick="@(() => Nav.NavigateTo($"/devices/{c.Id}/history"))" />
+
+                @if (_canEdit)
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                   Color="Color.Error"
+                                   Size="Size.Small"
+                                   Title="Delete"
+                                   OnClick="@(() => ConfirmDeleteClient(c))" />
+                }
+            </MudTd>
+        }
+    </RowTemplate>
+
+    <NoRecordsContent>
+        <MudText Typo="Typo.body2" Class="pa-4">No clients found.</MudText>
+    </NoRecordsContent>
+</MudTable>
+
+@code {
+    private const int UnassignedSentinel = -1;
+    private const int UnassignedLocationSentinel = -2;
+    private const int UnassignedSubnetSentinel = -3;
+    private const string PageKey = "Clients";
+
+    private List<Device> clients = new();
+    private List<ClientType> clientTypes = new();
+    private List<Location> locations = new();
+    private List<Subnet> subnets = new();
+    private bool _canEdit = true;
+
+    private readonly List<ColumnOption> columns = new()
+    {
+        new("Status", "Status"),
+        new("Name", "Name"),
+        new("Type", "Type"),
+        new("Hostname", "Hostname"),
+        new("IP", "IP"),
+        new("Subnet", "Subnet"),
+        new("MAC", "MAC"),
+        new("Conn", "Conn"),
+        new("Upstream", "Upstream"),
+        new("Host", "Host"),
+        new("Location", "Location"),
+        new("Rack", "Rack"),
+        new("Manufacturer", "Manufacturer"),
+        new("Model", "Model"),
+        new("OS", "OS"),
+        new("Actions", "Actions")
+    };
+
+    private Dictionary<string, bool> columnVisibility = new(StringComparer.OrdinalIgnoreCase);
+
+    private int? selectedTypeId = null;
+    private int? selectedLocationId = null;
+    private int? _selectedSubnetId = null;
+    private string? search;
+
+    private bool _showOnline = true;
+    private bool _showOffline = true;
+    private bool _hideIgnored = true;
+    private bool _hideDhcp;
+
+    private bool showOnline
+    {
+        get => _showOnline;
+        set
+        {
+            if (_showOnline == value)
+                return;
+            _showOnline = value;
+            SaveFilterState();
+        }
+    }
+
+    private bool showOffline
+    {
+        get => _showOffline;
+        set
+        {
+            if (_showOffline == value)
+                return;
+            _showOffline = value;
+            SaveFilterState();
+        }
+    }
+
+    private bool hideIgnored
+    {
+        get => _hideIgnored;
+        set
+        {
+            if (_hideIgnored == value)
+                return;
+            _hideIgnored = value;
+            SaveFilterState();
+        }
+    }
+
+    private bool hideDhcp
+    {
+        get => _hideDhcp;
+        set
+        {
+            if (_hideDhcp == value)
+                return;
+            _hideDhcp = value;
+            SaveFilterState();
+        }
+    }
+    private bool showLastSeenTooltips = true;
+
+    private CancellationTokenSource? _refreshCts;
+    private Task? _refreshLoop;
+
+    protected override async Task OnInitializedAsync()
+    {
+        SettingsService.SettingsChanged += OnSettingsChanged;
+        LoadFilterState();
+        await LoadColumnPreferencesAsync();
+        await SetPermissionsAsync();
+        await ReloadAll();
+
+        var settings = await SettingsService.LoadAsync();
+        ApplyUiSettings(settings);
+        StartOrRestartAutoRefresh(settings.UiAutoRefreshSeconds);
+    }
+
+    private async Task SetPermissionsAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        _canEdit = !user.IsInRole("Viewer");
+    }
+
+    private void LoadFilterState()
+    {
+        if (UiSessionState.TryGetFilters(PageKey, out var state))
+        {
+            _showOnline = state.ShowOnline;
+            _showOffline = state.ShowOffline;
+            _hideIgnored = state.HideIgnored;
+            _hideDhcp = state.HideDhcp;
+            _selectedSubnetId = state.SelectedSubnetId;
+        }
+        else
+        {
+            SaveFilterState();
+        }
+    }
+
+    private void SaveFilterState()
+        => UiSessionState.SetFilters(PageKey, new UiSessionStateService.FilterState(
+            _showOnline,
+            _showOffline,
+            _hideIgnored,
+            _hideDhcp,
+            _selectedSubnetId));
+
+    private int? selectedSubnetId
+    {
+        get => _selectedSubnetId;
+        set
+        {
+            if (_selectedSubnetId == value)
+                return;
+            _selectedSubnetId = value;
+            SaveFilterState();
+        }
+    }
+
+    private async Task ReloadAll()
+    {
+        clientTypes = await DbContext.ClientTypes
+            .AsNoTracking()
+            .Where(t => !t.IsDevice)
+            .OrderBy(t => t.Name)
+            .ToListAsync();
+
+        clients = await DbContext.Devices
+            .Include(d => d.Subnet)
+            .Include(d => d.ClientType)
+            .Include(d => d.HostDevice)
+            .Include(d => d.LocationRef)
+            .Include(d => d.RackRef)
+            .AsNoTracking()
+            .Where(d => d.ClientType == null || !d.ClientType.IsDevice)
+            .OrderBy(d => d.Name)
+            .ToListAsync();
+
+        locations = await DbContext.Locations
+            .AsNoTracking()
+            .OrderBy(l => l.Name)
+            .ToListAsync();
+
+        subnets = await DbContext.Subnets
+            .AsNoTracking()
+            .OrderBy(s => s.Name)
+            .ToListAsync();
+    }
+
+    private IEnumerable<Device> FilteredClients
+    {
+        get
+        {
+            IEnumerable<Device> q = clients;
+
+            if (!showOnline || !showOffline)
+            {
+                q = q.Where(d => !d.IsStatusTracked ||
+                                 (showOnline && d.IsOnline) ||
+                                 (showOffline && !d.IsOnline));
+            }
+
+            if (hideIgnored)
+                q = q.Where(d => !d.IgnoreOffline);
+
+            if (hideDhcp)
+                q = q.Where(d => !IsInDhcpRange(d));
+
+            if (selectedTypeId.HasValue)
+            {
+                if (selectedTypeId.Value == UnassignedSentinel)
+                    q = q.Where(d => d.ClientTypeId is null);
+                else
+                    q = q.Where(d => d.ClientTypeId == selectedTypeId.Value);
+            }
+
+            if (selectedLocationId.HasValue)
+            {
+                if (selectedLocationId.Value == UnassignedLocationSentinel)
+                {
+                    q = q.Where(d => d.LocationId is null && string.IsNullOrWhiteSpace(d.Location));
+                }
+                else
+                {
+                    q = q.Where(d => d.LocationId == selectedLocationId.Value);
+                }
+            }
+
+            if (selectedSubnetId.HasValue)
+            {
+                if (selectedSubnetId.Value == UnassignedSubnetSentinel)
+                {
+                    q = q.Where(d => d.SubnetId is null);
+                }
+                else
+                {
+                    q = q.Where(d => d.SubnetId == selectedSubnetId.Value);
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(search))
+            {
+                var term = search.Trim().ToLowerInvariant();
+                q = q.Where(d =>
+                    (d.Name ?? "").ToLowerInvariant().Contains(term) ||
+                    (d.IpAddress ?? "").ToLowerInvariant().Contains(term) ||
+                    (d.MacAddress ?? "").ToLowerInvariant().Contains(term) ||
+                    (d.Hostname ?? "").ToLowerInvariant().Contains(term) ||
+                    (d.Subnet?.Name ?? "").ToLowerInvariant().Contains(term) ||
+                    ((d.LocationRef?.Name ?? d.Location) ?? "").ToLowerInvariant().Contains(term) ||
+                    (d.RackRef?.Name ?? "").ToLowerInvariant().Contains(term));
+            }
+
+            return q;
+        }
+    }
+
+    private void ApplyUiSettings(AppSetting settings)
+    {
+        showLastSeenTooltips = settings.ShowLastSeenTooltips;
+    }
+
+    private void StartOrRestartAutoRefresh(int seconds)
+    {
+        StopAutoRefresh();
+
+        if (seconds <= 0)
+            return;
+
+        _refreshCts = new CancellationTokenSource();
+        var ct = _refreshCts.Token;
+        _refreshLoop = Task.Run(async () =>
+        {
+            try
+            {
+                while (!ct.IsCancellationRequested)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(seconds), ct);
+                    await InvokeAsync(ReloadAll);
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+            catch (OperationCanceledException) { }
+        }, ct);
+    }
+
+    private void StopAutoRefresh()
+    {
+        try { _refreshCts?.Cancel(); } catch { }
+        _refreshCts?.Dispose();
+        _refreshCts = null;
+        _refreshLoop = null;
+    }
+
+    public void Dispose()
+    {
+        StopAutoRefresh();
+        SettingsService.SettingsChanged -= OnSettingsChanged;
+    }
+
+    private async Task OpenColumnPicker()
+    {
+        var options = columns
+            .Select(c => new ColumnOption(c.Key, c.Label, ShowColumn(c.Key)))
+            .ToList();
+
+        var dialog = DialogService.Show<ColumnPickerDialog>(
+            "Column Selector",
+            new DialogParameters { ["Columns"] = options },
+            new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Small, FullWidth = true });
+
+        var result = await dialog.Result;
+        if (result.Canceled || result.Data is not List<ColumnOption> updated)
+            return;
+
+        await SaveColumnPreferencesAsync(updated);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task LoadColumnPreferencesAsync()
+    {
+        SetDefaultColumns();
+
+        var userId = await GetUserIdAsync();
+        if (string.IsNullOrWhiteSpace(userId))
+            return;
+
+        var prefs = await DbContext.UserColumnPreferences
+            .AsNoTracking()
+            .Where(p => p.UserId == userId && p.PageKey == PageKey)
+            .ToListAsync();
+
+        if (prefs.Count == 0)
+            return;
+
+        columnVisibility = columns.ToDictionary(
+            c => c.Key,
+            c =>
+            {
+                var p = prefs.FirstOrDefault(x => x.ColumnKey == c.Key);
+                return p?.IsVisible ?? true;
+            },
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    private async Task SaveColumnPreferencesAsync(List<ColumnOption> updated)
+    {
+        var userId = await GetUserIdAsync();
+        if (string.IsNullOrWhiteSpace(userId))
+            return;
+
+        var existing = await DbContext.UserColumnPreferences
+            .Where(p => p.UserId == userId && p.PageKey == PageKey)
+            .ToListAsync();
+
+        if (existing.Count > 0)
+            DbContext.UserColumnPreferences.RemoveRange(existing);
+
+        foreach (var opt in updated)
+        {
+            DbContext.UserColumnPreferences.Add(new UserColumnPreference
+            {
+                UserId = userId,
+                PageKey = PageKey,
+                ColumnKey = opt.Key,
+                IsVisible = opt.IsVisible,
+                UpdatedAtUtc = DateTime.UtcNow
+            });
+        }
+
+        await DbContext.SaveChangesAsync();
+        columnVisibility = updated.ToDictionary(c => c.Key, c => c.IsVisible, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void SetDefaultColumns()
+    {
+        columnVisibility = columns.ToDictionary(c => c.Key, c => c.IsVisible, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private bool ShowColumn(string key)
+        => columnVisibility.TryGetValue(key, out var visible) ? visible : true;
+
+    private async Task<string?> GetUserIdAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        return user.FindFirstValue(ClaimTypes.NameIdentifier);
+    }
+
+    private void OnSettingsChanged(AppSetting s)
+    {
+        ApplyUiSettings(s);
+        StartOrRestartAutoRefresh(s.UiAutoRefreshSeconds);
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void OnToggleRefresh(bool enabled)
+    {
+        var settings = SettingsService.LoadAsync().Result;
+        settings.UiAutoRefreshSeconds = enabled ? 10 : 0;
+        SettingsService.SaveAsync(settings);
+        StartOrRestartAutoRefresh(settings.UiAutoRefreshSeconds);
+    }
+
+    private int IpSortKey(string? ip)
+    {
+        if (string.IsNullOrWhiteSpace(ip))
+            return int.MinValue;
+
+        var octets = ip.Split('.');
+        if (octets.Length != 4)
+            return int.MinValue;
+
+        int value = 0;
+        for (int i = 0; i < 4; i++)
+        {
+            if (int.TryParse(octets[i], out var part))
+            {
+                value = (value << 8) + part;
+            }
+            else
+            {
+                return int.MinValue;
+            }
+        }
+        return value;
+    }
+
+    private async Task OpenAddClientDialog()
+    {
+        var parameters = new DialogParameters { ["DevicesOnly"] = false };
+        var dialog = DialogService.ShowStandard<AddDeviceDialog>("Add Client", parameters);
+        var result = await dialog.Result;
+        if (!result.Canceled)
+            await ReloadAll();
+    }
+
+    private async Task OpenAddDeviceDialog()
+    {
+        var parameters = new DialogParameters { ["DevicesOnly"] = true };
+        var dialog = DialogService.ShowStandard<AddDeviceDialog>("Add Device", parameters);
+        var result = await dialog.Result;
+        if (!result.Canceled)
+            await ReloadAll();
+    }
+
+    private async Task OpenEditDialog(Device row)
+    {
+        var isDevice = row.ClientType?.IsDevice == true;
+        var title = isDevice ? "Edit Device" : "Edit Client";
+
+        var parameters = new DialogParameters { ["DeviceId"] = row.Id };
+        var dialog = DialogService.ShowStandard<EditDeviceDialog>(title, parameters);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+            await ReloadAll();
+    }
+
+    private async Task ConfirmDeleteClient(Device client)
+    {
+        var confirm = await DialogService.ShowMessageBox(
+            title: "Delete client?",
+            message: $"Are you sure you want to delete '{client.Name}'?",
+            yesText: "Delete",
+            cancelText: "Cancel");
+
+        if (confirm != true)
+            return;
+
+        var tracked = await DbContext.Devices.FindAsync(client.Id);
+        if (tracked is null)
+            return;
+
+        DbContext.Devices.Remove(tracked);
+        await DbContext.SaveChangesAsync();
+
+        Snackbar.Add($"Deleted client '{client.Name}'.", Severity.Success);
+        await ReloadAll();
+    }
+
+    // --- helper methods (wifi/color/tooltips) ---
+    private static bool IsWifi(string? connectionType)
+        => !string.IsNullOrWhiteSpace(connectionType)
+           && connectionType.Trim().Equals("WiFi", StringComparison.OrdinalIgnoreCase);
+
+    private static string GetApOnly(string? detail)
+    {
+        if (string.IsNullOrWhiteSpace(detail))
+            return "?";
+
+        var parts = detail.Split('|', 2, StringSplitOptions.TrimEntries);
+        return parts.Length > 0 && !string.IsNullOrWhiteSpace(parts[0]) ? parts[0] : detail;
+    }
+
+    private static bool IsInDhcpRange(Device d)
+    {
+        if (d.Subnet is null)
+            return false;
+
+        var start = d.Subnet.DhcpRangeStart;
+        var end = d.Subnet.DhcpRangeEnd;
+        var ip = d.IpAddress;
+
+        if (string.IsNullOrWhiteSpace(start) || string.IsNullOrWhiteSpace(end) || string.IsNullOrWhiteSpace(ip))
+            return false;
+
+        if (!IpCidr.TryParseIPv4(start, out var startVal, out _))
+            return false;
+        if (!IpCidr.TryParseIPv4(end, out var endVal, out _))
+            return false;
+        if (!IpCidr.TryParseIPv4(ip, out var ipVal, out _))
+            return false;
+
+        var min = Math.Min(startVal, endVal);
+        var max = Math.Max(startVal, endVal);
+        return ipVal >= min && ipVal <= max;
+    }
+
+    private static string GetStatusTooltip(Device d)
+        => d.IsStatusTracked
+            ? $"Last Online: {FormatAbsRel(d.LastOnlineAt)}"
+            : "Status not tracked";
+
+    private static bool TryGetIpDisplay(Device d, out string display, out string tooltip)
+    {
+        display = d.IpAddress ?? "";
+        tooltip = display;
+
+        if (string.IsNullOrWhiteSpace(d.IpAddress))
+            return false;
+
+        if (d.MonitorPort is null)
+            return false;
+
+        if (!UsesPort(d.MonitorMode) && !UsesHttp(d.MonitorMode))
+            return false;
+
+        display = $"{d.IpAddress}:{d.MonitorPort}";
+        tooltip = BuildMonitorTooltip(d);
+        return true;
+    }
+
+    private static string BuildMonitorTooltip(Device d)
+    {
+        var mode = d.MonitorMode;
+        var port = d.MonitorPort?.ToString() ?? "-";
+
+        if (UsesHttp(mode))
+        {
+            var scheme = d.MonitorUseHttps ? "https" : "http";
+            var path = string.IsNullOrWhiteSpace(d.MonitorHttpPath) ? "/" : d.MonitorHttpPath.Trim();
+            return $"HTTP check: {scheme}://{d.IpAddress}:{port}{path}";
+        }
+
+        if (UsesPort(mode))
+            return $"TCP port check: {port}";
+
+        return "Ping only";
+    }
+
+    private static string FormatAbsRel(DateTime? utc)
+    {
+        if (utc is null) return "-";
+
+        var local = DateTime.SpecifyKind(utc.Value, DateTimeKind.Utc).ToLocalTime();
+        var abs = local.ToString("MM-dd-yyyy HH:mm");
+        var rel = ToRelative(DateTime.UtcNow - utc.Value);
+        return $"{abs} ({rel})";
+    }
+
+    private static string ToRelative(TimeSpan age)
+    {
+        if (age < TimeSpan.Zero) age = TimeSpan.Zero;
+        if (age.TotalSeconds < 60) return "just now";
+        if (age.TotalMinutes < 60) return $"{(int)age.TotalMinutes}m ago";
+        if (age.TotalHours < 48) return $"{(int)age.TotalHours}h ago";
+        if (age.TotalDays < 14) return $"{(int)age.TotalDays}d ago";
+        return $"{(int)(age.TotalDays / 7)}w ago";
+    }
+}

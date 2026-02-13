@@ -1,0 +1,1894 @@
+﻿@page "/unifi-import"
+@using MudBlazor
+@using Microsoft.EntityFrameworkCore
+@using Netipam.Data
+@using Netipam.Unifi
+@using Netipam.Services
+@using System.Text.Json
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject AppDbContext DbContext
+@inject ISnackbar Snackbar
+@inject UnifiApiClient Unifi
+@inject UnifiUpdaterControl UpdaterControl
+@inject AuthenticationStateProvider AuthStateProvider
+
+@if (_isViewer)
+{
+    <MudAlert Severity="Severity.Warning" Dense="true">
+        Viewer accounts cannot access UniFi Import.
+    </MudAlert>
+}
+else
+{
+    <MudStack Spacing="2">
+        <MudText Typo="Typo.h6">UniFi Import</MudText>
+
+        <MudAlert Severity="Severity.Info" Dense="true">
+            <strong>Fresh install workflow:</strong> Import Subnets → Import UniFi Devices → Import Clients.
+            After the first run, you can import subnets or re-run client/device imports whenever needed.
+        </MudAlert>
+
+    <MudPaper Class="pa-3" Elevation="1">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+            <MudText Typo="Typo.h6">Connection</MudText>
+            <MudSpacer />
+            <MudButton Variant="Variant.Outlined" Size="Size.Small" Style="font-size:0.8rem;" Disabled="@busy" OnClick="TestConnect">
+                Test Connect
+            </MudButton>
+        </MudStack>
+
+        @if (!string.IsNullOrWhiteSpace(connectStatus))
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">@connectStatus</MudAlert>
+        }
+    </MudPaper>
+
+    <MudTabs Rounded="true" Border="true" Class="mt-2">
+
+        <MudTabPanel Text="Import Subnets">
+            <MudPaper Class="pa-3 mt-2" Elevation="1">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudText Typo="Typo.h6">Subnets Preview</MudText>
+                    <MudSpacer />
+
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Style="font-size:0.8rem;" Disabled="@busy" OnClick="LoadSubnetsPreview">
+                        Load Subnets Preview
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Text"
+                               Disabled="@((busy) || (subnetRows.Count == 0))"
+                               OnClick="@(() => SelectAllSubnets())">
+                        Select all
+                    </MudButton>
+                    <MudButton Variant="Variant.Text"
+                               Disabled="@((busy) || (subnetRows.Count == 0))"
+                               OnClick="@(() => SelectNoneSubnets())">
+                        Select none
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               Disabled="@((busy) || (subnetRows.Count == 0) || (subnetRows.Count(r => r.Selected) == 0))"
+                               OnClick="CommitSubnets">
+                        Commit (@subnetRows.Count(r => r.Selected))
+                    </MudButton>
+                </MudStack>
+
+                @if (!string.IsNullOrWhiteSpace(subnetStatus))
+                {
+                    <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">@subnetStatus</MudAlert>
+                }
+
+                @if (subnetRows.Count > 0)
+                {
+                    <MudTable T="SubnetPreviewRow" Items="@subnetRows" Dense="true" Hover="true" Bordered="true" Striped="true" Class="mt-2">
+                        <HeaderContent>
+                            <MudTh style="width:48px;">
+                                <MudCheckBox T="bool"
+                                             Value="@AllSubnetsSelected"
+                                             Indeterminate="@SubnetsIndeterminate"
+                                             ValueChanged="OnSubnetsHeaderToggle" />
+                            </MudTh>
+                            <MudTh>Status</MudTh>
+                            <MudTh>Name</MudTh>
+                            <MudTh>CIDR</MudTh>
+                            <MudTh>Description</MudTh>
+                            <MudTh>DHCP Range</MudTh>
+                            <MudTh>VLAN</MudTh>
+                        </HeaderContent>
+
+                        <RowTemplate Context="r">
+                            <MudTd><MudCheckBox T="bool" @bind-Value="r.Selected" /></MudTd>
+                            <MudTd>
+                                @if (r.Kind == PreviewKind.New)
+                                {
+                                    <MudChip T="string" Color="Color.Success" Variant="Variant.Filled" Size="Size.Small">New</MudChip>
+                                }
+                                else if (r.Kind == PreviewKind.Changed)
+                                {
+                                    <MudChip T="string" Color="Color.Warning" Variant="Variant.Filled" Size="Size.Small">Changed</MudChip>
+                                }
+                                else
+                                {
+                                    <MudChip T="string" Variant="Variant.Outlined" Size="Size.Small">Unchanged</MudChip>
+                                }
+                            </MudTd>
+                            <MudTd>@r.Name</MudTd>
+                            <MudTd>@r.Cidr</MudTd>
+                            <MudTd>@r.Description</MudTd>
+                            <MudTd>@FormatDhcpRange(r.DhcpStart, r.DhcpEnd)</MudTd>
+                            <MudTd>@FormatVlan(r.VlanId)</MudTd>
+                        </RowTemplate>
+                    </MudTable>
+                }
+            </MudPaper>
+        </MudTabPanel>
+
+        <!-- NEW: UniFi Infrastructure Devices -->
+        <MudTabPanel Text="Import UniFi Devices">
+            <MudPaper Class="pa-3 mt-2" Elevation="1">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudText Typo="Typo.h6">Infrastructure Devices Preview</MudText>
+                    <MudSpacer />
+
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Style="font-size:0.8rem;" Disabled="@busy" OnClick="LoadInfraPreview">
+                        Load Devices Preview
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Text"
+                               Disabled="@((busy) || (infraRows.Count == 0))"
+                               OnClick="@SelectAllInfra">
+                        Select all
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Text"
+                               Disabled="@((busy) || (infraRows.Count == 0))"
+                               OnClick="@SelectNoneInfra">
+                        Select none
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               Disabled="@((busy) || (infraRows.Count == 0) || (infraRows.Count(r => r.Selected) == 0))"
+                               OnClick="CommitInfra">
+                        Commit (@infraRows.Count(r => r.Selected))
+                    </MudButton>
+                </MudStack>
+
+                @if (!string.IsNullOrWhiteSpace(infraStatus))
+                {
+                    <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">@infraStatus</MudAlert>
+                }
+
+                @if (infraRows.Count > 0)
+                {
+                    <MudPaper Class="mt-2" Style="overflow-x:auto; width:100%;">
+                        <MudTable T="InfraPreviewRow"
+                                  Items="@infraRows"
+                                  Dense="true"
+                                  Hover="true"
+                                  Bordered="true"
+                                  Striped="true"
+                                  Style="min-width:1100px;">
+                            <HeaderContent>
+                                <MudTh style="width:48px;">
+                                    <MudCheckBox T="bool"
+                                                 Value="@AllInfraSelected"
+                                                 Indeterminate="@InfraIndeterminate"
+                                                 ValueChanged="OnInfraHeaderToggle" />
+                                </MudTh>
+                                <MudTh>Status</MudTh>
+                                <MudTh>UniFi Type</MudTh>
+                                <MudTh>Mapped Device Type</MudTh>
+                                <MudTh>MAC</MudTh>
+                                <MudTh>Name</MudTh>
+                                <MudTh>IP</MudTh>
+                                <MudTh>Model</MudTh>
+                            </HeaderContent>
+
+                            <RowTemplate Context="r">
+                                <MudTd><MudCheckBox T="bool" @bind-Value="r.Selected" /></MudTd>
+
+                                <MudTd>
+                                    @if (r.Kind == PreviewKind.New)
+                                    {
+                                        <MudChip T="string" Color="Color.Success" Variant="Variant.Filled" Size="Size.Small">New</MudChip>
+                                    }
+                                    else if (r.Kind == PreviewKind.Changed)
+                                    {
+                                        <MudChip T="string" Color="Color.Warning" Variant="Variant.Filled" Size="Size.Small">Changed</MudChip>
+                                    }
+                                    else
+                                    {
+                                        <MudChip T="string" Variant="Variant.Outlined" Size="Size.Small">Unchanged</MudChip>
+                                    }
+                                </MudTd>
+
+                                <MudTd>@r.UnifiType</MudTd>
+                                <MudTd>@r.MappedTypeName</MudTd>
+                                <MudTd>@r.Mac</MudTd>
+                                <MudTd>@r.Name</MudTd>
+                                <MudTd>@r.IpAddress</MudTd>
+                                <MudTd>@r.Model</MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                    </MudPaper>
+                }
+            </MudPaper>
+        </MudTabPanel>
+
+        <MudTabPanel Text="Import Clients">
+            <MudPaper Class="pa-3 mt-2" Elevation="1">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudText Typo="Typo.h6">Clients Preview</MudText>
+                    <MudSpacer />
+
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Style="font-size:0.8rem;" Disabled="@busy" OnClick="LoadClientsPreview">
+                        Load Clients Preview
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Text"
+                               Disabled="@((busy) || (clientRows.Count == 0))"
+                               OnClick="@(() => SelectAllClients())">
+                        Select all
+                    </MudButton>
+                    <MudButton Variant="Variant.Text"
+                               Disabled="@((busy) || (clientRows.Count == 0))"
+                               OnClick="@(() => SelectNoneClients())">
+                        Select none
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               Disabled="@((busy) || (clientRows.Count == 0) || (clientRows.Count(r => r.Selected) == 0))"
+                               OnClick="CommitClients">
+                        Commit (@clientRows.Count(r => r.Selected))
+                    </MudButton>
+                </MudStack>
+
+                @if (!string.IsNullOrWhiteSpace(clientStatus))
+                {
+                    <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">@clientStatus</MudAlert>
+                }
+
+                @if (clientRows.Count > 0)
+                {
+                    <MudPaper Class="mt-2" Style="overflow-x:auto; width:100%;">
+                        <MudTable T="ClientPreviewRow"
+                                  Items="@clientRows"
+                                  Dense="true"
+                                  Hover="true"
+                                  Bordered="true"
+                                  Striped="true"
+                                  Style="min-width:1100px;">
+                            <HeaderContent>
+                                <MudTh style="width:48px;">
+                                    <MudCheckBox T="bool"
+                                                 Value="@AllClientsSelected"
+                                                 Indeterminate="@ClientsIndeterminate"
+                                                 ValueChanged="OnClientsHeaderToggle" />
+                                </MudTh>
+                                <MudTh>Status</MudTh>
+                                <MudTh>Online</MudTh>
+                                <MudTh>MAC</MudTh>
+                                <MudTh>Name</MudTh>
+                                <MudTh>Hostname</MudTh>
+                                <MudTh>IP</MudTh>
+                                <MudTh>Conn</MudTh>
+                                <MudTh>Where</MudTh>
+                                <MudTh>Manufacturer</MudTh>
+                            </HeaderContent>
+
+                            <RowTemplate Context="r">
+                                <MudTd><MudCheckBox T="bool" @bind-Value="r.Selected" /></MudTd>
+
+                                <MudTd>
+                                    @if (r.Kind == PreviewKind.New)
+                                    {
+                                        <MudChip T="string" Color="Color.Success" Variant="Variant.Filled" Size="Size.Small">New</MudChip>
+                                    }
+                                    else if (r.Kind == PreviewKind.Changed)
+                                    {
+                                        <MudChip T="string" Color="Color.Warning" Variant="Variant.Filled" Size="Size.Small">Changed</MudChip>
+                                    }
+                                    else
+                                    {
+                                        <MudChip T="string" Variant="Variant.Outlined" Size="Size.Small">Unchanged</MudChip>
+                                    }
+                                </MudTd>
+
+                                <MudTd DataLabel="Online">
+                                    @if (r.IsOnline)
+                                    {
+                                        <MudChip T="string" Color="Color.Success" Variant="Variant.Filled" Size="Size.Small">Online</MudChip>
+                                    }
+                                    else
+                                    {
+                                        <MudChip T="string" Color="Color.Error" Variant="Variant.Filled" Size="Size.Small">Offline</MudChip>
+                                    }
+                                </MudTd>
+
+                                <MudTd>@r.Mac</MudTd>
+                                <MudTd>@r.Name</MudTd>
+                                <MudTd>@r.Hostname</MudTd>
+                                <MudTd>@r.IpAddress</MudTd>
+
+                                <MudTd DataLabel="Conn">
+                                    @if (!string.IsNullOrWhiteSpace(r.ConnectionType))
+                                    {
+                                        <MudChip T="string" Variant="Variant.Outlined" Size="Size.Small">@r.ConnectionType</MudChip>
+                                    }
+                                </MudTd>
+                                <MudTd DataLabel="Where">@r.ConnectionDetail</MudTd>
+
+                                <MudTd>@r.Manufacturer</MudTd>
+                            </RowTemplate>
+                        </MudTable>
+                    </MudPaper>
+
+                }
+            </MudPaper>
+        </MudTabPanel>
+
+        <MudTabPanel Text="UniFi Client Update">
+            <MudPaper Class="pa-3 mt-2" Elevation="1">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudText Typo="Typo.h6">Client Update Preview (MAC-matched)</MudText>
+                    <MudSpacer />
+
+                    <MudButton Variant="Variant.Outlined" Size="Size.Small" Style="font-size:0.8rem;" Disabled="@busy" OnClick="LoadClientUpdatePreview">
+                        Load Update Preview
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Text"
+                               Disabled="@((busy) || (updateRows.Count == 0))"
+                               OnClick="@(() => SelectAllChangedFields())">
+                        Select all changes
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Text"
+                               Disabled="@((busy) || (updateRows.Count == 0))"
+                               OnClick="@(() => SelectNoFields())">
+                        Select none
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               Disabled="@((busy) || (updateRows.Count == 0) || (SelectedFieldCount == 0))"
+                               OnClick="CommitClientUpdates">
+                        Commit (@SelectedFieldCount fields)
+                    </MudButton>
+                </MudStack>
+
+                @if (!string.IsNullOrWhiteSpace(updateStatus))
+                {
+                    <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">@updateStatus</MudAlert>
+                }
+
+                @if (updateRows.Count > 0)
+                {
+                    <MudTabs Class="mt-3" Rounded="true" Border="true">
+                        <MudTabPanel Text="@($"Changed ({updateRows.Count(r => r.Kind == UpdateKind.Changed)})")">
+                            @ClientUpdateTable(updateRows.Where(r => r.Kind == UpdateKind.Changed).ToList())
+                        </MudTabPanel>
+
+                        <MudTabPanel Text="@($"New ({updateRows.Count(r => r.Kind == UpdateKind.New)})")">
+                            @ClientUpdateTable(updateRows.Where(r => r.Kind == UpdateKind.New).ToList())
+                        </MudTabPanel>
+
+                        <MudTabPanel Text="@($"Unchanged ({updateRows.Count(r => r.Kind == UpdateKind.Unchanged)})")">
+                            @ClientUpdateTable(updateRows.Where(r => r.Kind == UpdateKind.Unchanged).ToList())
+                        </MudTabPanel>
+                    </MudTabs>
+                }
+            </MudPaper>
+        </MudTabPanel>
+
+    </MudTabs>
+    </MudStack>
+}
+
+@code {
+    private bool _isViewer;
+    private bool busy;
+    private string? connectStatus;
+
+    // --- Subnets preview ---
+    private string? subnetStatus;
+    private readonly List<SubnetPreviewRow> subnetRows = new();
+
+    private bool AllSubnetsSelected => subnetRows.Count > 0 && subnetRows.All(r => r.Selected);
+    private bool SubnetsIndeterminate => subnetRows.Any(r => r.Selected) && !AllSubnetsSelected;
+
+    private void SelectAllSubnets() { foreach (var r in subnetRows) r.Selected = true; StateHasChanged(); }
+    private void SelectNoneSubnets() { foreach (var r in subnetRows) r.Selected = false; StateHasChanged(); }
+    private void OnSubnetsHeaderToggle(bool v) { foreach (var r in subnetRows) r.Selected = v; StateHasChanged(); }
+
+    // --- Clients preview ---
+    private string? clientStatus;
+    private readonly List<ClientPreviewRow> clientRows = new();
+
+    private bool AllClientsSelected => clientRows.Count > 0 && clientRows.All(r => r.Selected);
+    private bool ClientsIndeterminate => clientRows.Any(r => r.Selected) && !AllClientsSelected;
+
+    private void SelectAllClients() { foreach (var r in clientRows) r.Selected = true; StateHasChanged(); }
+    private void SelectNoneClients() { foreach (var r in clientRows) r.Selected = false; StateHasChanged(); }
+    private void OnClientsHeaderToggle(bool v) { foreach (var r in clientRows) r.Selected = v; StateHasChanged(); }
+
+    // --- NEW: Infra devices preview ---
+    private string? infraStatus;
+    private readonly List<InfraPreviewRow> infraRows = new();
+
+    private bool AllInfraSelected => infraRows.Count > 0 && infraRows.All(r => r.Selected);
+    private bool InfraIndeterminate => infraRows.Any(r => r.Selected) && !AllInfraSelected;
+
+    private void SelectAllInfra() { foreach (var r in infraRows) r.Selected = true; StateHasChanged(); }
+    private void SelectNoneInfra() { foreach (var r in infraRows) r.Selected = false; StateHasChanged(); }
+    private void OnInfraHeaderToggle(bool v) { foreach (var r in infraRows) r.Selected = v; StateHasChanged(); }
+
+    // --- Client Update (field-level) ---
+    private string? updateStatus;
+    private readonly List<ClientUpdateRow> updateRows = new();
+
+    private int SelectedFieldCount =>
+        updateRows
+            .Where(r => r.ApplyRow && r.Kind != UpdateKind.Unchanged)
+            .Sum(r => r.FieldRows.Count(f => f.Changed && f.Apply));
+
+    private static string? BuildSubnetDescription(UnifiParsers.UnifiNetwork s)
+    {
+        var parts = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(s.Purpose))
+            parts.Add(s.Purpose!.Trim());
+
+        return parts.Count == 0 ? null : string.Join(" | ", parts);
+    }
+
+private static string FormatDhcpRange(string? start, string? end)
+{
+    var s = start?.Trim();
+    var e = end?.Trim();
+
+        if (string.IsNullOrWhiteSpace(s) && string.IsNullOrWhiteSpace(e))
+            return "-";
+
+        if (!string.IsNullOrWhiteSpace(s) && !string.IsNullOrWhiteSpace(e))
+            return $"{s} - {e}";
+
+        return s ?? e ?? "-";
+    }
+
+private static string FormatVlan(int? vlan)
+    => vlan.HasValue ? vlan.Value.ToString() : "-";
+
+protected override void OnInitialized()
+{
+    UpdaterControl.DelayStarted += OnUnifiDelay;
+    base.OnInitialized();
+}
+
+private void OnUnifiDelay(TimeSpan wait)
+{
+    // Inform user that UniFi calls are staggering to avoid 403s
+    Snackbar.Add($"Waiting {wait.TotalSeconds:n0}s before contacting UniFi (recent call just ran).", Severity.Info);
+}
+
+public void Dispose()
+{
+    UpdaterControl.DelayStarted -= OnUnifiDelay;
+}
+
+    // -----------------------------
+    // Connection
+    // -----------------------------
+    private async Task TestConnect()
+    {
+        busy = true;
+        connectStatus = null;
+
+        try
+        {
+            await UpdaterControl.RunAsync(async () =>
+            {
+                await Unifi.LoginAsync();
+            });
+
+            connectStatus = "Login OK.";
+        }
+        catch (Exception ex)
+        {
+            connectStatus = $"Connection error: {ex.Message}";
+        }
+        finally { busy = false; }
+    }
+
+    // -----------------------------
+    // Subnets Import
+    // -----------------------------
+    private async Task LoadSubnetsPreview()
+    {
+        busy = true;
+        subnetStatus = null;
+        subnetRows.Clear();
+
+        try
+        {
+            JsonDocument doc = null!;
+            await UpdaterControl.RunAsync(async () =>
+            {
+                doc = await Unifi.GetNetworksAsync();
+            });
+
+            var incoming = UnifiParsers.ParseNetworks(doc);
+
+            var existing = await DbContext.Subnets.AsNoTracking().ToListAsync();
+            var existingByCidr = existing
+                .Where(s => !string.IsNullOrWhiteSpace(s.Cidr))
+                .ToDictionary(s => s.Cidr!.Trim(), s => s, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var s in incoming)
+        {
+            if (string.IsNullOrWhiteSpace(s.Cidr))
+                continue;
+
+            existingByCidr.TryGetValue(s.Cidr.Trim(), out var db);
+
+                var incomingDescription = BuildSubnetDescription(s);
+
+                var kind =
+                    db is null ? PreviewKind.New :
+                    (Changed(db.Name, s.Name) ||
+                     Changed(db.Cidr, s.Cidr) ||
+                     Changed(db.Description, incomingDescription) ||
+                     Changed(db.DhcpRangeStart, s.DhcpStart) ||
+                     Changed(db.DhcpRangeEnd, s.DhcpEnd) ||
+                     Changed(db.Dns1, s.Dns1) ||
+                     Changed(db.Dns2, s.Dns2) ||
+                     db.VlanId != s.VlanId) ? PreviewKind.Changed :
+                    PreviewKind.Unchanged;
+
+            subnetRows.Add(new SubnetPreviewRow
+            {
+                Selected = kind != PreviewKind.Unchanged,
+                Kind = kind,
+                Name = s.Name?.Trim(),
+                Cidr = s.Cidr.Trim(),
+                Description = incomingDescription,
+                DhcpStart = s.DhcpStart?.Trim(),
+                DhcpEnd = s.DhcpEnd?.Trim(),
+                VlanId = s.VlanId,
+                Dns1 = s.Dns1?.Trim(),
+                Dns2 = s.Dns2?.Trim()
+            });
+        }
+
+            subnetStatus = $"Loaded {subnetRows.Count} subnets.";
+        }
+        catch (Exception ex)
+        {
+            subnetStatus = $"Error loading subnets: {ex.Message}";
+        }
+        finally { busy = false; }
+    }
+
+    private async Task CommitSubnets()
+    {
+        busy = true;
+        try
+        {
+            var selected = subnetRows.Where(r => r.Selected).ToList();
+            if (selected.Count == 0)
+            {
+                subnetStatus = "None selected.";
+                return;
+            }
+
+            var db = await DbContext.Subnets.ToListAsync();
+            var byCidr = db
+                .Where(s => !string.IsNullOrWhiteSpace(s.Cidr))
+                .ToDictionary(s => s.Cidr!.Trim(), s => s, StringComparer.OrdinalIgnoreCase);
+
+            int created = 0, updated = 0;
+
+            foreach (var r in selected)
+            {
+                if (!byCidr.TryGetValue(r.Cidr!, out var entity))
+                {
+                    entity = new Subnet();
+                    DbContext.Subnets.Add(entity);
+                    created++;
+                }
+                else
+                {
+                    updated++;
+                }
+
+                entity.Name = r.Name?.Trim() ?? "";
+                entity.Cidr = r.Cidr!.Trim();
+                entity.Description = r.Description;
+                entity.DhcpRangeStart = r.DhcpStart?.Trim();
+                entity.DhcpRangeEnd = r.DhcpEnd?.Trim();
+                entity.VlanId = r.VlanId;
+                entity.Dns1 = r.Dns1?.Trim();
+                entity.Dns2 = r.Dns2?.Trim();
+            }
+
+            await DbContext.SaveChangesAsync();
+            subnetStatus = $"Commit complete. Created: {created}, Updated: {updated}.";
+            Snackbar.Add(subnetStatus, Severity.Success);
+        }
+        catch (DbUpdateException ex)
+        {
+            var inner = ex.InnerException;
+            while (inner?.InnerException != null) inner = inner.InnerException;
+            subnetStatus = $"Commit error: {inner?.Message ?? ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            subnetStatus = $"Commit error: {ex.Message}";
+        }
+        finally { busy = false; }
+    }
+
+    // -----------------------------
+    // Clients Import (whole-client preview)
+    // -----------------------------
+    private async Task LoadClientsPreview()
+    {
+        busy = true;
+        clientStatus = null;
+        clientRows.Clear();
+
+        try
+        {
+            JsonDocument activeDoc = null!;
+            JsonDocument knownDoc = null!;
+            JsonDocument devicesDoc = null!;
+
+            await UpdaterControl.RunAsync(async () =>
+            {
+                activeDoc = await Unifi.GetActiveClientsAsync();
+                knownDoc = await Unifi.GetKnownClientsAsync();
+                devicesDoc = await Unifi.GetDevicesAsync();
+            });
+
+            var deviceNameMap = UnifiParsers.BuildDeviceNameMap(devicesDoc);
+            var incoming = UnifiParsers.MergeClients(activeDoc, knownDoc, deviceNameMap);
+
+            var existing = await DbContext.Devices.AsNoTracking().ToListAsync();
+            var existingByMac = existing
+                .Where(d => !string.IsNullOrWhiteSpace(d.MacAddress))
+                .GroupBy(d => UnifiParsers.NormalizeMac(d.MacAddress!))
+                .ToDictionary(g => g.Key, g => g.First());
+
+            foreach (var c in incoming)
+            {
+                if (string.IsNullOrWhiteSpace(c.Mac))
+                    continue;
+
+                var mac = UnifiParsers.NormalizeMac(c.Mac);
+                existingByMac.TryGetValue(mac, out var db);
+
+                // IMPORTANT: "Changed" ignores Manufacturer/Model/OS (curated fields)
+                var kind =
+                    db is null ? PreviewKind.New :
+                    (Changed(db.Name, c.Name) ||
+                     Changed(db.Hostname, c.Hostname) ||
+                     Changed(db.IpAddress, c.IpAddress) ||
+                     Changed(db.ConnectionType, c.ConnectionType) ||
+                     Changed(db.ConnectionDetail, c.ConnectionDetail)) ? PreviewKind.Changed :
+                    PreviewKind.Unchanged;
+
+                clientRows.Add(new ClientPreviewRow
+                {
+                    Selected = kind switch
+                    {
+                        PreviewKind.Unchanged => false,
+                        PreviewKind.New => c.IsOnline,
+                        PreviewKind.Changed => true,
+                        _ => false
+                    },
+                    Kind = kind,
+                    Mac = mac,
+                    Name = c.Name?.Trim(),
+                    Hostname = c.Hostname?.Trim(),
+                    IpAddress = c.IpAddress?.Trim(),
+                    Manufacturer = c.Manufacturer?.Trim(),
+                    IsOnline = c.IsOnline,
+                    ConnectionType = c.ConnectionType?.Trim(),
+                    ConnectionDetail = c.ConnectionDetail?.Trim(),
+                    UpstreamDeviceName = c.UpstreamDeviceName?.Trim(),
+                    UpstreamDeviceMac = c.UpstreamDeviceMac?.Trim(),
+                    UpstreamConnection = c.UpstreamConnection?.Trim()
+                });
+            }
+
+            clientStatus = $"Loaded {clientRows.Count} clients.";
+        }
+        catch (Exception ex)
+        {
+            clientStatus = $"Error loading clients: {ex.Message}";
+        }
+        finally { busy = false; }
+    }
+
+    private async Task CommitClients()
+    {
+        busy = true;
+        try
+        {
+            var selected = clientRows.Where(r => r.Selected).ToList();
+            if (selected.Count == 0)
+            {
+                clientStatus = "None selected.";
+                return;
+            }
+
+            var tracked = await DbContext.Devices.ToListAsync();
+            var trackedByMac = tracked
+                .Where(d => !string.IsNullOrWhiteSpace(d.MacAddress))
+                .GroupBy(d => UnifiParsers.NormalizeMac(d.MacAddress!))
+                .ToDictionary(g => g.Key, g => g.First());
+            var trackedByName = BuildNameLookup(tracked);
+            var trackedById = tracked.ToDictionary(d => d.Id);
+
+            int created = 0, updated = 0;
+
+            foreach (var r in selected)
+            {
+                if (string.IsNullOrWhiteSpace(r.Mac))
+                    continue;
+
+                var macKey = UnifiParsers.NormalizeMac(r.Mac!);
+
+                if (!trackedByMac.TryGetValue(macKey, out var entity))
+                {
+                    entity = new Device { IsStatusTracked = true };
+                    DbContext.Devices.Add(entity);
+                    created++;
+                }
+                else
+                {
+                    updated++;
+                }
+
+                entity.MacAddress = macKey;
+
+                var safeName =
+                    !string.IsNullOrWhiteSpace(r.Name) ? r.Name!.Trim() :
+                    !string.IsNullOrWhiteSpace(r.Hostname) ? r.Hostname!.Trim() :
+                    macKey;
+
+                entity.Name = safeName;
+
+                entity.Hostname = r.Hostname?.Trim();
+                entity.IpAddress = r.IpAddress?.Trim();
+
+                entity.Manufacturer = r.Manufacturer?.Trim();
+
+                var connectionType = TrimOrNull(r.ConnectionType);
+                if (!string.IsNullOrWhiteSpace(connectionType))
+                    entity.ConnectionType = connectionType;
+
+                var connectionDetail = TrimOrNull(r.ConnectionDetail);
+                if (!string.IsNullOrWhiteSpace(connectionDetail))
+                    entity.ConnectionDetail = connectionDetail;
+
+                var upstreamName = TrimOrNull(r.UpstreamDeviceName);
+                if (!string.IsNullOrWhiteSpace(upstreamName))
+                    entity.UpstreamDeviceName = upstreamName;
+
+                var upstreamMac = NormalizeMacOrNull(r.UpstreamDeviceMac);
+                if (!string.IsNullOrWhiteSpace(upstreamMac))
+                    entity.UpstreamDeviceMac = upstreamMac;
+
+                var upstreamConn = TrimOrNull(r.UpstreamConnection);
+                if (!string.IsNullOrWhiteSpace(upstreamConn))
+                    entity.UpstreamConnection = upstreamConn;
+                entity.ParentDeviceId = ResolveParentDeviceId(entity, entity.UpstreamDeviceMac, entity.UpstreamDeviceName, trackedByMac, trackedByName);
+
+                entity.SubnetId = await ResolveSubnetIdForIpAsync(entity.IpAddress);
+
+                trackedByMac[macKey] = entity;
+                UpsertName(trackedByName, entity);
+            }
+
+            await DbContext.SaveChangesAsync();
+            clientStatus = $"Commit complete. Created: {created}, Updated: {updated}.";
+            Snackbar.Add(clientStatus, Severity.Success);
+        }
+        catch (DbUpdateException ex)
+        {
+            var inner = ex.InnerException;
+            while (inner?.InnerException != null) inner = inner.InnerException;
+            clientStatus = $"Commit error: {inner?.Message ?? ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            clientStatus = $"Commit error: {ex.Message}";
+        }
+        finally { busy = false; }
+    }
+
+    // -----------------------------
+    // NEW: UniFi Infrastructure Devices import
+    // -----------------------------
+    private static string MapUnifiTypeToDeviceTypeName(string? unifiType)
+    {
+        var t = (unifiType ?? "").Trim().ToLowerInvariant();
+
+        if (t.StartsWith("uap")) return "Wireless AP";
+        if (t.StartsWith("usw")) return "Network Switch";
+
+        if (t.StartsWith("ugw") || t.StartsWith("udm") || t.StartsWith("uxg"))
+            return "Gateway / Router";
+
+        if (t.StartsWith("uvc")) return "Security Camera";
+        if (t.StartsWith("unvr")) return "NVR";
+        if (t.StartsWith("uck")) return "UniFi Controller";
+
+        return "Other UniFi Device";
+    }
+
+    private async Task<Dictionary<string, int>> EnsureInfraDeviceTypesAsync(CancellationToken ct = default)
+    {
+        var required = new[]
+        {
+            "Wireless AP",
+            "Network Switch",
+            "Gateway / Router",
+            "Security Camera",
+            "NVR",
+            "UniFi Controller",
+            "Other UniFi Device"
+        };
+
+        var existing = await DbContext.ClientTypes.ToListAsync(ct);
+        var byName = existing.ToDictionary(x => x.Name.Trim(), x => x, StringComparer.OrdinalIgnoreCase);
+
+        bool added = false;
+
+        foreach (var name in required)
+        {
+            if (!byName.ContainsKey(name))
+            {
+                var ctRow = new ClientType
+                {
+                    Name = name,
+                    IsDevice = true,
+                    IsHost = false
+                };
+
+                DbContext.ClientTypes.Add(ctRow);
+                byName[name] = ctRow;
+                added = true;
+            }
+            else
+            {
+                var ctRow = byName[name];
+                if (!ctRow.IsDevice)
+                {
+                    ctRow.IsDevice = true;
+                    added = true;
+                }
+            }
+        }
+
+        if (added)
+            await DbContext.SaveChangesAsync(ct);
+
+        var refreshed = await DbContext.ClientTypes.AsNoTracking().ToListAsync(ct);
+
+        return refreshed
+            .Where(x => required.Contains(x.Name, StringComparer.OrdinalIgnoreCase))
+            .ToDictionary(x => x.Name.Trim(), x => x.Id, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private async Task LoadInfraPreview()
+    {
+        busy = true;
+        infraStatus = null;
+        infraRows.Clear();
+
+        try
+        {
+            var typeIdByName = await EnsureInfraDeviceTypesAsync();
+
+            JsonDocument doc = null!;
+            await UpdaterControl.RunAsync(async () =>
+            {
+                doc = await Unifi.GetDevicesAsync(); // <-- requires UnifiApiClient method you add
+            });
+
+            var deviceNameMap = UnifiParsers.BuildDeviceNameMap(doc);
+            var incoming = UnifiParsers.ParseInfraDevices(doc);
+
+            var existing = await DbContext.Devices
+                .Include(d => d.ClientType)
+                .AsNoTracking()
+                .ToListAsync();
+
+            var existingByMac = existing
+                .Where(d => !string.IsNullOrWhiteSpace(d.MacAddress))
+                .GroupBy(d => UnifiParsers.NormalizeMac(d.MacAddress!))
+                .ToDictionary(g => g.Key, g => g.First());
+
+            foreach (var u in incoming)
+            {
+                var mac = UnifiParsers.NormalizeMac(u.Mac);
+                existingByMac.TryGetValue(mac, out var db);
+
+                var mappedTypeName = MapUnifiTypeToDeviceTypeName(u.Type);
+                typeIdByName.TryGetValue(mappedTypeName, out var mappedTypeId);
+
+                var uplink = BuildInfraUplink(u, deviceNameMap);
+
+                var kind =
+                    db is null ? PreviewKind.New :
+                    (Changed(db.Name, u.Name) ||
+                     Changed(db.IpAddress, u.IpAddress) ||
+                     Changed(db.Model, u.Model) ||
+                     db.ClientTypeId != mappedTypeId) ? PreviewKind.Changed :
+                    PreviewKind.Unchanged;
+
+                infraRows.Add(new InfraPreviewRow
+                {
+                    Selected = kind != PreviewKind.Unchanged,
+                    Kind = kind,
+
+                    Mac = mac,
+                    Name = u.Name?.Trim(),
+                    IpAddress = u.IpAddress?.Trim(),
+                    Model = u.Model?.Trim(),
+
+                    UnifiType = u.Type?.Trim(),
+                    MappedTypeName = mappedTypeName,
+                    MappedTypeId = mappedTypeId,
+
+                    ConnectionDetail = uplink.Detail,
+                    UpstreamDeviceName = uplink.ParentName,
+                    UpstreamDeviceMac = uplink.ParentMac,
+                    UpstreamConnection = uplink.Connection
+                });
+            }
+
+            infraStatus = $"Loaded {infraRows.Count} UniFi devices.";
+        }
+        catch (Exception ex)
+        {
+            infraStatus = $"Error loading UniFi devices: {ex.Message}";
+        }
+        finally { busy = false; }
+    }
+
+    private (string? ParentName, string? ParentMac, string? Connection, string? Detail) BuildInfraUplink(UnifiParsers.UnifiInfraDevice u, IReadOnlyDictionary<string, string> deviceNameMap)
+    {
+        if (string.IsNullOrWhiteSpace(u.UplinkMac) && u.UplinkPort is null)
+            return (null, null, null, null);
+
+        string? parentName = null;
+        string? parentMac = null;
+
+        if (!string.IsNullOrWhiteSpace(u.UplinkMac))
+        {
+            parentMac = UnifiParsers.NormalizeMac(u.UplinkMac);
+
+            if (deviceNameMap.TryGetValue(parentMac, out var mapped))
+                parentName = mapped;
+            else
+                parentName = u.UplinkMac;
+        }
+
+        var conn = u.UplinkPort is not null ? $"port {u.UplinkPort.Value}" : null;
+
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(parentName))
+            parts.Add(parentName);
+        if (!string.IsNullOrWhiteSpace(conn))
+            parts.Add(conn);
+
+        var detail = parts.Count == 0 ? null : string.Join(" | ", parts);
+        return (parentName, parentMac, conn, detail);
+    }
+
+    private async Task CommitInfra()
+    {
+        busy = true;
+
+        try
+        {
+            var selected = infraRows.Where(r => r.Selected).ToList();
+            if (selected.Count == 0)
+            {
+                infraStatus = "None selected.";
+                return;
+            }
+
+            var tracked = await DbContext.Devices.ToListAsync();
+            var trackedByMac = tracked
+                .Where(d => !string.IsNullOrWhiteSpace(d.MacAddress))
+                .GroupBy(d => UnifiParsers.NormalizeMac(d.MacAddress!))
+                .ToDictionary(g => g.Key, g => g.First());
+            var trackedByName = BuildNameLookup(tracked);
+            var trackedById = tracked.ToDictionary(d => d.Id);
+
+            int created = 0, updated = 0;
+
+            foreach (var r in selected)
+            {
+                if (string.IsNullOrWhiteSpace(r.Mac))
+                    continue;
+
+                var macKey = UnifiParsers.NormalizeMac(r.Mac);
+
+                if (!trackedByMac.TryGetValue(macKey, out var entity))
+                {
+                    entity = new Device { IsStatusTracked = true };
+                    DbContext.Devices.Add(entity);
+                    created++;
+                }
+                else
+                {
+                    updated++;
+                }
+
+                entity.MacAddress = macKey;
+
+                if (r.MappedTypeId is not null)
+                    entity.ClientTypeId = r.MappedTypeId;
+
+                entity.Name = !string.IsNullOrWhiteSpace(r.Name) ? r.Name!.Trim() : entity.MacAddress!;
+                entity.IpAddress = r.IpAddress?.Trim();
+
+                entity.Manufacturer ??= "Ubiquiti";
+                entity.Model = r.Model?.Trim();
+
+                // Set connection fields for infra devices (uplink to parent)
+                entity.ConnectionType = "Wired";
+
+                var infraUpstreamName = TrimOrNull(r.UpstreamDeviceName);
+                if (!string.IsNullOrWhiteSpace(infraUpstreamName))
+                    entity.UpstreamDeviceName = infraUpstreamName;
+
+                var infraUpstreamMac = NormalizeMacOrNull(r.UpstreamDeviceMac);
+                if (!string.IsNullOrWhiteSpace(infraUpstreamMac))
+                    entity.UpstreamDeviceMac = infraUpstreamMac;
+
+                var infraUpstreamConn = TrimOrNull(r.UpstreamConnection);
+                if (!string.IsNullOrWhiteSpace(infraUpstreamConn))
+                    entity.UpstreamConnection = infraUpstreamConn;
+
+                var infraConnectionDetail = TrimOrNull(r.ConnectionDetail);
+                if (!string.IsNullOrWhiteSpace(infraConnectionDetail))
+                    entity.ConnectionDetail = infraConnectionDetail;
+                entity.ParentDeviceId = ResolveParentDeviceId(entity, entity.UpstreamDeviceMac, entity.UpstreamDeviceName, trackedByMac, trackedByName);
+                EnsureHostUpstream(entity, trackedById);
+
+                entity.SubnetId = await ResolveSubnetIdForIpAsync(entity.IpAddress);
+
+                trackedByMac[macKey] = entity;
+                UpsertName(trackedByName, entity);
+                trackedById[entity.Id] = entity;
+            }
+
+            await DbContext.SaveChangesAsync();
+
+            infraStatus = $"Commit complete. Created: {created}, Updated: {updated}.";
+            Snackbar.Add(infraStatus, Severity.Success);
+        }
+        catch (DbUpdateException ex)
+        {
+            var inner = ex.InnerException;
+            while (inner?.InnerException != null) inner = inner.InnerException;
+            infraStatus = $"Commit error: {inner?.Message ?? ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            infraStatus = $"Commit error: {ex.Message}";
+        }
+        finally { busy = false; }
+    }
+
+    // -----------------------------
+    // Client Update (per-field)
+    // -----------------------------
+    private async Task LoadClientUpdatePreview()
+    {
+        busy = true;
+        updateStatus = null;
+        updateRows.Clear();
+
+        try
+        {
+            var unifiClients = await FetchUnifiClientsAsync();
+
+            var dbClients = await DbContext.Devices.AsNoTracking().ToListAsync();
+            var dbByMac = dbClients
+                .Where(d => !string.IsNullOrWhiteSpace(d.MacAddress))
+                .GroupBy(d => UnifiParsers.NormalizeMac(d.MacAddress!))
+                .ToDictionary(g => g.Key, g => g.First());
+
+            foreach (var u in unifiClients)
+            {
+                if (string.IsNullOrWhiteSpace(u.Mac))
+                    continue;
+
+                var mac = UnifiParsers.NormalizeMac(u.Mac);
+                dbByMac.TryGetValue(mac, out var existing);
+
+                var row = ClientUpdateRow.From(existing, u);
+
+                if (row.Kind == UpdateKind.New || row.Kind == UpdateKind.Changed)
+                {
+                    row.ApplyRow = true;
+                    row.ApplyAllChangedFields();
+                }
+                else
+                {
+                    row.ApplyRow = false;
+                }
+
+                updateRows.Add(row);
+            }
+
+            updateStatus = $"Loaded {updateRows.Count} UniFi clients. " +
+                           $"New: {updateRows.Count(r => r.Kind == UpdateKind.New)}, " +
+                           $"Changed: {updateRows.Count(r => r.Kind == UpdateKind.Changed)}, " +
+                           $"Unchanged: {updateRows.Count(r => r.Kind == UpdateKind.Unchanged)}.";
+        }
+        catch (Exception ex)
+        {
+            updateStatus = $"Error loading update preview: {ex.Message}";
+        }
+        finally { busy = false; }
+    }
+
+    private void SelectAllChangedFields()
+    {
+        foreach (var r in updateRows.Where(r => r.Kind != UpdateKind.Unchanged))
+        {
+            r.ApplyRow = true;
+            r.ApplyAllChangedFields();
+        }
+        StateHasChanged();
+    }
+
+    private void SelectNoFields()
+    {
+        foreach (var r in updateRows)
+        {
+            r.ApplyRow = false;
+            r.ClearAllFields();
+        }
+        StateHasChanged();
+    }
+
+    private async Task CommitClientUpdates()
+    {
+        busy = true;
+        updateStatus = null;
+
+        try
+        {
+            var trackedDb = await DbContext.Devices.ToListAsync();
+            var trackedByMac = trackedDb
+                .Where(d => !string.IsNullOrWhiteSpace(d.MacAddress))
+                .GroupBy(d => UnifiParsers.NormalizeMac(d.MacAddress!))
+                .ToDictionary(g => g.Key, g => g.First());
+            var trackedByName = BuildNameLookup(trackedDb);
+            var trackedById = trackedDb.ToDictionary(d => d.Id);
+
+            int created = 0;
+            int updated = 0;
+            int fieldsApplied = 0;
+
+            foreach (var r in updateRows.Where(r => r.ApplyRow && r.Kind != UpdateKind.Unchanged))
+            {
+                var mac = UnifiParsers.NormalizeMac(r.Mac);
+
+                var applyFields = r.FieldRows.Where(f => f.Changed && f.Apply).ToList();
+
+                if (!trackedByMac.TryGetValue(mac, out var entity))
+                {
+                    entity = new Device { MacAddress = r.Mac, IsStatusTracked = true };
+
+                    ApplyFields(entity, r, applyFields);
+
+                    if (string.IsNullOrWhiteSpace(entity.Name))
+                        entity.Name =
+                            !string.IsNullOrWhiteSpace(entity.Hostname) ? entity.Hostname! :
+                            !string.IsNullOrWhiteSpace(entity.MacAddress) ? entity.MacAddress! :
+                            "Unknown";
+
+                    if (r.IsOnline)
+                    {
+                        var updateConnType = TrimOrNull(r.ConnectionType);
+                        if (!string.IsNullOrWhiteSpace(updateConnType))
+                            entity.ConnectionType = updateConnType;
+
+                        var updateConnDetail = TrimOrNull(r.ConnectionDetail);
+                        if (!string.IsNullOrWhiteSpace(updateConnDetail))
+                            entity.ConnectionDetail = updateConnDetail;
+
+                        var updateUpstreamName = TrimOrNull(r.UpstreamDeviceName);
+                        if (!string.IsNullOrWhiteSpace(updateUpstreamName))
+                            entity.UpstreamDeviceName = updateUpstreamName;
+
+                        var updateUpstreamMac = NormalizeMacOrNull(r.UpstreamDeviceMac);
+                        if (!string.IsNullOrWhiteSpace(updateUpstreamMac))
+                            entity.UpstreamDeviceMac = updateUpstreamMac;
+
+                        var updateUpstreamConn = TrimOrNull(r.UpstreamConnection);
+                        if (!string.IsNullOrWhiteSpace(updateUpstreamConn))
+                            entity.UpstreamConnection = updateUpstreamConn;
+                    }
+
+                    entity.ParentDeviceId = ResolveParentDeviceId(entity, entity.UpstreamDeviceMac, entity.UpstreamDeviceName, trackedByMac, trackedByName);
+                    EnsureHostUpstream(entity, trackedById);
+
+                    entity.SubnetId = await ResolveSubnetIdForIpAsync(entity.IpAddress);
+                    DbContext.Devices.Add(entity);
+
+                    created++;
+                    fieldsApplied += applyFields.Count;
+
+                    trackedByMac[mac] = entity;
+                    UpsertName(trackedByName, entity);
+                    trackedById[entity.Id] = entity;
+                }
+                else
+                {
+                    ApplyFields(entity, r, applyFields);
+
+                    if (string.IsNullOrWhiteSpace(entity.Name))
+                        entity.Name =
+                            !string.IsNullOrWhiteSpace(entity.Hostname) ? entity.Hostname! :
+                            !string.IsNullOrWhiteSpace(entity.MacAddress) ? entity.MacAddress! :
+                            "Unknown";
+
+                    if (applyFields.Any(f => f.Key == FieldKey.IpAddress))
+                        entity.SubnetId = await ResolveSubnetIdForIpAsync(entity.IpAddress);
+
+                    if (r.IsOnline)
+                    {
+                        var updateConnType = TrimOrNull(r.ConnectionType);
+                        if (!string.IsNullOrWhiteSpace(updateConnType))
+                            entity.ConnectionType = updateConnType;
+
+                        var updateConnDetail = TrimOrNull(r.ConnectionDetail);
+                        if (!string.IsNullOrWhiteSpace(updateConnDetail))
+                            entity.ConnectionDetail = updateConnDetail;
+
+                        var updateUpstreamName = TrimOrNull(r.UpstreamDeviceName);
+                        if (!string.IsNullOrWhiteSpace(updateUpstreamName))
+                            entity.UpstreamDeviceName = updateUpstreamName;
+
+                        var updateUpstreamMac = NormalizeMacOrNull(r.UpstreamDeviceMac);
+                        if (!string.IsNullOrWhiteSpace(updateUpstreamMac))
+                            entity.UpstreamDeviceMac = updateUpstreamMac;
+
+                        var updateUpstreamConn = TrimOrNull(r.UpstreamConnection);
+                        if (!string.IsNullOrWhiteSpace(updateUpstreamConn))
+                            entity.UpstreamConnection = updateUpstreamConn;
+                    }
+
+                    entity.ParentDeviceId = ResolveParentDeviceId(entity, entity.UpstreamDeviceMac, entity.UpstreamDeviceName, trackedByMac, trackedByName);
+                    EnsureHostUpstream(entity, trackedById);
+
+                    updated++;
+                    fieldsApplied += applyFields.Count;
+
+                    trackedByMac[mac] = entity;
+                    UpsertName(trackedByName, entity);
+                    trackedById[entity.Id] = entity;
+                }
+            }
+
+            await DbContext.SaveChangesAsync();
+            updateStatus = $"Commit complete. Created: {created}, Updated: {updated}, Fields applied: {fieldsApplied}.";
+            Snackbar.Add(updateStatus, Severity.Success);
+        }
+        catch (DbUpdateException ex)
+        {
+            var inner = ex.InnerException;
+            while (inner?.InnerException != null) inner = inner.InnerException;
+            updateStatus = $"Commit error: {inner?.Message ?? ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            updateStatus = $"Commit error: {ex.Message}";
+        }
+        finally { busy = false; }
+    }
+
+    // -----------------------------
+    // UI helper (update table)
+    // -----------------------------
+    private RenderFragment ClientUpdateTable(List<ClientUpdateRow> rows) => @<MudTable T="ClientUpdateRow"
+                                                                                       Items="@rows"
+                                                                                       Dense="true"
+                                                                                       Hover="true"
+                                                                                       Bordered="true"
+                                                                                       Striped="true"
+                                                                                       Breakpoint="Breakpoint.Sm">
+    <HeaderContent>
+        <MudTh style="width:48px;">
+            <MudCheckBox T="bool"
+                         Value="@AllUpdateRowsSelected(rows)"
+                         Indeterminate="@UpdateRowsIndeterminate(rows)"
+                         ValueChanged="@((bool v) => OnUpdateRowsHeaderToggle(rows, v))" />
+        </MudTh>
+
+        <MudTh style="width:36px;"></MudTh>
+        <MudTh>Status</MudTh>
+        <MudTh>Online</MudTh>
+        <MudTh>MAC</MudTh>
+        <MudTh>Name</MudTh>
+        <MudTh>Hostname</MudTh>
+        <MudTh>IP</MudTh>
+        <MudTh>Conn</MudTh>
+        <MudTh>Where</MudTh>
+        <MudTh style="width:120px;">Apply</MudTh>
+    </HeaderContent>
+
+    <RowTemplate Context="r">
+        <MudTd>
+            <MudCheckBox T="bool"
+                         @bind-Value="r.ApplyRow"
+                         Disabled="@(r.Kind == UpdateKind.Unchanged)" />
+        </MudTd>
+
+        <MudTd>
+            <MudIconButton Icon="@(r.Expanded? Icons.Material.Filled.ExpandLess : Icons.Material.Filled.ExpandMore)"
+                           Size="Size.Small"
+                           OnClick="@(() => r.Expanded = !r.Expanded)" />
+        </MudTd>
+
+        <MudTd>
+            @if (r.Kind == UpdateKind.New)
+                        {
+            <MudChip T="string" Color="Color.Success" Variant="Variant.Filled" Size="Size.Small">New</MudChip>
+                        }
+                        else if (r.Kind == UpdateKind.Changed)
+                        {
+            <MudChip T="string" Color="Color.Warning" Variant="Variant.Filled" Size="Size.Small">Changed</MudChip>
+                        }
+                        else
+                        {
+            <MudChip T="string" Variant="Variant.Outlined" Size="Size.Small">Unchanged</MudChip>
+                        }
+        </MudTd>
+
+        <MudTd DataLabel="Online">
+            @if (r.IsOnline)
+                        {
+            <MudChip T="string" Color="Color.Success" Variant="Variant.Filled" Size="Size.Small">Online</MudChip>
+                        }
+                        else
+            {
+                <MudChip T="string" Color="Color.Error" Variant="Variant.Filled" Size="Size.Small">Offline</MudChip>
+            }
+        </MudTd>
+
+        <MudTd>@r.Mac</MudTd>
+
+        <MudTd>@FieldCell(r.Name)</MudTd>
+        <MudTd>@FieldCell(r.Hostname)</MudTd>
+        <MudTd>@FieldCell(r.IpAddress)</MudTd>
+
+        <MudTd DataLabel="Conn">
+            @if (!string.IsNullOrWhiteSpace(r.ConnectionType))
+            {
+                <MudChip T="string" Variant="Variant.Outlined" Size="Size.Small">@r.ConnectionType</MudChip>
+            }
+        </MudTd>
+        <MudTd DataLabel="Where">@r.ConnectionDetail</MudTd>
+
+        <MudTd>
+            <MudCheckBox T="bool"
+                         @bind-Value="r.ApplyRow"
+                         Disabled="@(r.Kind == UpdateKind.Unchanged)" />
+        </MudTd>
+    </RowTemplate>
+
+    <ChildRowContent Context="r">
+        @if (r.Expanded)
+        {
+            <MudTd ColSpan="11" Class="pa-3">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-2">
+                    <MudText Typo="Typo.subtitle2">Field-level updates</MudText>
+                    <MudSpacer />
+                    <MudText Typo="Typo.caption">Header checkbox applies changed fields only</MudText>
+                </MudStack>
+
+                <MudTable T="FieldRow" Dense="true" Bordered="true" Striped="true" Items="@r.FieldRows">
+                    <HeaderContent>
+                        <MudTh style="width:90px;">
+                            <MudCheckBox T="bool"
+                                         Value="@AllFieldsSelected(r)"
+                                         Indeterminate="@FieldsIndeterminate(r)"
+                                         ValueChanged="@((bool v) => OnFieldsHeaderToggle(r, v))"
+                                         Disabled="@(!r.ApplyRow || r.Kind == UpdateKind.Unchanged)" />
+                        </MudTh>
+                        <MudTh>Field</MudTh>
+                        <MudTh>Current (DB)</MudTh>
+                        <MudTh>Incoming (UniFi)</MudTh>
+                    </HeaderContent>
+
+                    <RowTemplate Context="f">
+                        <MudTd>
+                            <MudCheckBox T="bool"
+                                         @bind-Value="f.Apply"
+                                         Disabled="@(!r.ApplyRow || !f.Changed || r.Kind == UpdateKind.Unchanged)" />
+                        </MudTd>
+                        <MudTd>@f.Label</MudTd>
+                        <MudTd>@f.Current</MudTd>
+                        <MudTd>
+                            @if (f.Changed)
+                            {
+                                <MudChip T="string" Color="Color.Warning" Variant="Variant.Outlined" Size="Size.Small">
+                                    @f.Incoming
+                                </MudChip>
+                            }
+                            else
+                            {
+                                @f.Incoming
+                            }
+                        </MudTd>
+                    </RowTemplate>
+                </MudTable>
+
+                <MudStack Row="true" Spacing="1" Class="mt-2">
+                    <MudButton Variant="Variant.Text" Disabled="@(!r.ApplyRow)" OnClick="@(() => r.ApplyAllChangedFields())">
+                        Apply all changed fields
+                    </MudButton>
+                    <MudButton Variant="Variant.Text" Disabled="@(!r.ApplyRow)" OnClick="@(() => r.ClearAllFields())">
+                        Clear all fields
+                    </MudButton>
+                </MudStack>
+            </MudTd>
+        }
+    </ChildRowContent>
+</MudTable>;
+
+private RenderFragment FieldCell(FieldPack p) => @<div>
+@if (p.Changed)
+{
+        <MudChip T="string" Color="Color.Warning" Variant="Variant.Outlined" Size="Size.Small">@p.Incoming</MudChip>
+}
+else
+{
+    @p.Incoming
+}
+</div>;
+
+// -----------------------------
+// Row header checkbox helpers (Update table)
+// -----------------------------
+private bool AllUpdateRowsSelected(List<ClientUpdateRow> rows)
+{
+    var eligible = rows.Where(r => r.Kind != UpdateKind.Unchanged).ToList();
+    return eligible.Count > 0 && eligible.All(r => r.ApplyRow);
+}
+
+private bool UpdateRowsIndeterminate(List<ClientUpdateRow> rows)
+{
+    var eligible = rows.Where(r => r.Kind != UpdateKind.Unchanged).ToList();
+    if (eligible.Count == 0) return false;
+
+    var any = eligible.Any(r => r.ApplyRow);
+    var all = eligible.All(r => r.ApplyRow);
+    return any && !all;
+}
+
+private void OnUpdateRowsHeaderToggle(List<ClientUpdateRow> rows, bool value)
+{
+    foreach (var r in rows.Where(r => r.Kind != UpdateKind.Unchanged))
+    {
+        r.ApplyRow = value;
+
+        if (value)
+            r.ApplyAllChangedFields();
+        else
+            r.ClearAllFields();
+    }
+    StateHasChanged();
+}
+
+// -----------------------------
+// Field header checkbox helpers (per expanded row)
+// -----------------------------
+private bool AllFieldsSelected(ClientUpdateRow r)
+{
+    var eligible = r.FieldRows.Where(f => f.Changed).ToList();
+    return eligible.Count > 0 && eligible.All(f => f.Apply);
+}
+
+private bool FieldsIndeterminate(ClientUpdateRow r)
+{
+    var eligible = r.FieldRows.Where(f => f.Changed).ToList();
+    if (eligible.Count == 0) return false;
+
+    var any = eligible.Any(f => f.Apply);
+    var all = eligible.All(f => f.Apply);
+    return any && !all;
+}
+
+private void OnFieldsHeaderToggle(ClientUpdateRow r, bool value)
+{
+    foreach (var f in r.FieldRows.Where(f => f.Changed))
+        f.Apply = value;
+
+    StateHasChanged();
+}
+
+// -----------------------------
+// UniFi integration mapping (used by update preview)
+// -----------------------------
+private async Task<List<IncomingUnifiClient>> FetchUnifiClientsAsync()
+{
+    JsonDocument activeDoc = null!;
+    JsonDocument knownDoc = null!;
+    JsonDocument devicesDoc = null!;
+
+    await UpdaterControl.RunAsync(async () =>
+    {
+        activeDoc = await Unifi.GetActiveClientsAsync();
+        knownDoc = await Unifi.GetKnownClientsAsync();
+        devicesDoc = await Unifi.GetDevicesAsync();
+    });
+
+    var deviceNameMap = UnifiParsers.BuildDeviceNameMap(devicesDoc);
+    var merged = UnifiParsers.MergeClients(activeDoc, knownDoc, deviceNameMap);
+
+    return merged.Select(c => new IncomingUnifiClient
+    {
+        Mac = c.Mac,
+        Name = c.Name,
+        Hostname = c.Hostname,
+        IpAddress = c.IpAddress,
+        IsOnline = c.IsOnline,
+        ConnectionType = c.ConnectionType,
+        ConnectionDetail = c.ConnectionDetail,
+        UpstreamDeviceName = c.UpstreamDeviceName,
+        UpstreamDeviceMac = c.UpstreamDeviceMac,
+        UpstreamConnection = c.UpstreamConnection
+    }).ToList();
+}
+
+// -----------------------------
+// Helpers
+// -----------------------------
+private static bool Changed(string? a, string? b)
+    => !string.Equals((a ?? "").Trim(), (b ?? "").Trim(), StringComparison.OrdinalIgnoreCase);
+
+private static string? TrimOrNull(string? value) =>
+    string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+private static string? NormalizeMacOrNull(string? mac) =>
+    string.IsNullOrWhiteSpace(mac) ? null : UnifiParsers.NormalizeMac(mac);
+
+private static Dictionary<string, Device> BuildNameLookup(IEnumerable<Device> devices)
+{
+    var dict = new Dictionary<string, Device>(StringComparer.OrdinalIgnoreCase);
+
+    foreach (var d in devices)
+    {
+        if (string.IsNullOrWhiteSpace(d.Name))
+            continue;
+
+        var key = d.Name.Trim();
+        if (!dict.ContainsKey(key))
+            dict[key] = d;
+    }
+
+    return dict;
+}
+
+private static void UpsertName(IDictionary<string, Device> map, Device entity)
+{
+    if (string.IsNullOrWhiteSpace(entity.Name))
+        return;
+
+    map[entity.Name.Trim()] = entity;
+}
+
+private static void EnsureHostUpstream(Device entity, IDictionary<int, Device> byId)
+{
+    if (entity.HostDeviceId is not int hostId)
+        return;
+
+    if (!byId.TryGetValue(hostId, out var host))
+        return;
+
+    entity.ParentDeviceId = host.Id;
+    entity.UpstreamDeviceName = host.Name ?? entity.UpstreamDeviceName;
+    entity.UpstreamDeviceMac = host.MacAddress ?? entity.UpstreamDeviceMac;
+    entity.UpstreamConnection = "Hosted";
+}
+
+private static int? ResolveParentDeviceId(
+    Device entity,
+    string? upstreamMac,
+    string? upstreamName,
+    IDictionary<string, Device> byMac,
+    IDictionary<string, Device> byName)
+{
+    if (entity.HostDeviceId is int hostId)
+    {
+        entity.UpstreamConnection ??= "Hosted";
+        if (hostId != entity.Id)
+            return hostId;
+    }
+
+    Device? parent = null;
+
+    if (!string.IsNullOrWhiteSpace(upstreamMac))
+    {
+        var macKey = UnifiParsers.NormalizeMac(upstreamMac);
+        if (byMac.TryGetValue(macKey, out var candidate) && candidate.Id != entity.Id)
+            parent = candidate;
+    }
+
+    if (parent is null && !string.IsNullOrWhiteSpace(upstreamName))
+    {
+        var nameKey = upstreamName.Trim();
+        if (byName.TryGetValue(nameKey, out var candidate) && candidate.Id != entity.Id)
+            parent = candidate;
+    }
+
+    return parent?.Id;
+}
+
+private static void ApplyFields(Device entity, ClientUpdateRow row, List<FieldRow> fields)
+{
+    foreach (var f in fields)
+    {
+        switch (f.Key)
+        {
+            case FieldKey.Name:
+                entity.Name =
+                    !string.IsNullOrWhiteSpace(row.Name.Incoming) ? row.Name.Incoming!.Trim() :
+                    !string.IsNullOrWhiteSpace(entity.Hostname) ? entity.Hostname! :
+                    !string.IsNullOrWhiteSpace(entity.MacAddress) ? entity.MacAddress! :
+                    "Unknown";
+                break;
+
+            case FieldKey.Hostname:
+                entity.Hostname = row.Hostname.Incoming?.Trim();
+                break;
+
+            case FieldKey.IpAddress:
+                entity.IpAddress = row.IpAddress.Incoming?.Trim();
+                break;
+        }
+    }
+
+    if (string.IsNullOrWhiteSpace(entity.Name))
+    {
+        entity.Name =
+            !string.IsNullOrWhiteSpace(entity.Hostname) ? entity.Hostname! :
+            !string.IsNullOrWhiteSpace(entity.MacAddress) ? entity.MacAddress! :
+            "Unknown";
+    }
+}
+
+private async Task<int?> ResolveSubnetIdForIpAsync(string? ip)
+{
+    if (string.IsNullOrWhiteSpace(ip))
+        return null;
+
+    if (!IpCidr.TryParseIPv4(ip.Trim(), out var ipUInt, out _))
+        return null;
+
+    var subnets = await DbContext.Subnets
+        .AsNoTracking()
+        .Select(s => new { s.Id, s.Cidr })
+        .ToListAsync();
+
+    foreach (var s in subnets)
+    {
+        if (string.IsNullOrWhiteSpace(s.Cidr))
+            continue;
+
+        if (!IpCidr.TryParseIPv4Cidr(s.Cidr, out var info, out _))
+            continue;
+
+        if (ipUInt >= info.NetworkUInt && ipUInt <= info.BroadcastUInt)
+            return s.Id;
+    }
+
+    return null;
+}
+
+// -----------------------------
+// Models for this page
+// -----------------------------
+private enum PreviewKind { New, Changed, Unchanged }
+
+private sealed class SubnetPreviewRow
+{
+    public bool Selected { get; set; }
+    public PreviewKind Kind { get; set; }
+    public string? Name { get; set; }
+    public string? Cidr { get; set; }
+    public string? Description { get; set; }
+    public string? DhcpStart { get; set; }
+    public string? DhcpEnd { get; set; }
+    public int? VlanId { get; set; }
+    public string? Dns1 { get; set; }
+    public string? Dns2 { get; set; }
+}
+
+private sealed class ClientPreviewRow
+{
+    public bool Selected { get; set; }
+    public PreviewKind Kind { get; set; }
+    public string? Mac { get; set; }
+    public string? Name { get; set; }
+    public string? Hostname { get; set; }
+    public string? IpAddress { get; set; }
+    public string? Manufacturer { get; set; }
+    public bool IsOnline { get; set; }
+
+    public string? ConnectionType { get; set; }
+    public string? ConnectionDetail { get; set; }
+    public string? UpstreamDeviceName { get; set; }
+    public string? UpstreamDeviceMac { get; set; }
+    public string? UpstreamConnection { get; set; }
+}
+
+// ✅ #4 CLARIFICATION: This class is part of UnifiImport.razor, inside @code, alongside the others.
+private sealed class InfraPreviewRow
+{
+    public bool Selected { get; set; }
+    public PreviewKind Kind { get; set; }
+
+    public string Mac { get; set; } = "";
+    public string? Name { get; set; }
+    public string? IpAddress { get; set; }
+    public string? Model { get; set; }
+
+    public string? UnifiType { get; set; }
+    public string? MappedTypeName { get; set; }
+    public int? MappedTypeId { get; set; }
+
+    public string? ConnectionDetail { get; set; }
+    public string? UpstreamDeviceName { get; set; }
+    public string? UpstreamDeviceMac { get; set; }
+    public string? UpstreamConnection { get; set; }
+}
+
+private enum UpdateKind { New, Changed, Unchanged }
+private enum FieldKey { Name, Hostname, IpAddress }
+
+private sealed class IncomingUnifiClient
+{
+    public string? Mac { get; set; }
+    public string? Name { get; set; }
+    public string? Hostname { get; set; }
+    public string? IpAddress { get; set; }
+    public bool IsOnline { get; set; }
+
+    public string? ConnectionType { get; set; }
+    public string? ConnectionDetail { get; set; }
+    public string? UpstreamDeviceName { get; set; }
+    public string? UpstreamDeviceMac { get; set; }
+    public string? UpstreamConnection { get; set; }
+}
+
+private sealed class FieldRow
+{
+    public FieldKey Key { get; init; }
+    public string Label { get; init; } = "";
+    public string? Current { get; init; }
+    public string? Incoming { get; init; }
+    public bool Changed { get; init; }
+    public bool Apply { get; set; }
+}
+
+private sealed class FieldPack
+{
+    public string? Current { get; init; }
+    public string? Incoming { get; init; }
+    public bool Changed { get; init; }
+}
+
+private sealed class ClientUpdateRow
+{
+    public UpdateKind Kind { get; private set; }
+    public string Mac { get; private set; } = "";
+
+    public bool IsOnline { get; private set; }
+    public bool ApplyRow { get; set; }
+    public bool Expanded { get; set; }
+
+    public string? ConnectionType { get; private set; }
+    public string? ConnectionDetail { get; private set; }
+    public string? UpstreamDeviceName { get; private set; }
+    public string? UpstreamDeviceMac { get; private set; }
+    public string? UpstreamConnection { get; private set; }
+
+    public FieldPack Name { get; private set; } = new();
+    public FieldPack Hostname { get; private set; } = new();
+    public FieldPack IpAddress { get; private set; } = new();
+
+    public List<FieldRow> FieldRows { get; private set; } = new();
+
+    public static ClientUpdateRow From(Device? existing, IncomingUnifiClient incoming)
+    {
+        var row = new ClientUpdateRow
+        {
+            Mac = UnifiParsers.NormalizeMac(incoming.Mac ?? "")
+        };
+
+        row.IsOnline = incoming.IsOnline;
+
+        row.ConnectionType = incoming.ConnectionType?.Trim();
+        row.ConnectionDetail = incoming.ConnectionDetail?.Trim();
+        row.UpstreamDeviceName = incoming.UpstreamDeviceName?.Trim();
+        row.UpstreamDeviceMac = incoming.UpstreamDeviceMac?.Trim();
+        row.UpstreamConnection = incoming.UpstreamConnection?.Trim();
+
+        row.Name = Pack(existing?.Name, incoming.Name);
+        row.Hostname = Pack(existing?.Hostname, incoming.Hostname);
+        row.IpAddress = Pack(existing?.IpAddress, incoming.IpAddress);
+
+        row.FieldRows = new List<FieldRow>
+            {
+                Make(FieldKey.Name, "Name", row.Name),
+                Make(FieldKey.Hostname, "Hostname", row.Hostname),
+                Make(FieldKey.IpAddress, "IP Address", row.IpAddress),
+            };
+
+        if (existing is null)
+            row.Kind = UpdateKind.New;
+        else if (row.FieldRows.Any(f => f.Changed))
+            row.Kind = UpdateKind.Changed;
+        else
+            row.Kind = UpdateKind.Unchanged;
+
+        return row;
+    }
+
+    public void ApplyAllChangedFields()
+    {
+        foreach (var f in FieldRows)
+            f.Apply = f.Changed;
+    }
+
+    public void ClearAllFields()
+    {
+        foreach (var f in FieldRows)
+            f.Apply = false;
+    }
+
+    private static FieldPack Pack(string? current, string? incoming)
+    {
+        var c = (current ?? "").Trim();
+        var i = (incoming ?? "").Trim();
+
+        return new FieldPack
+        {
+            Current = current,
+            Incoming = incoming,
+            Changed = !string.Equals(c, i, StringComparison.OrdinalIgnoreCase)
+        };
+    }
+
+    private static FieldRow Make(FieldKey key, string label, FieldPack p) =>
+        new FieldRow
+        {
+            Key = key,
+            Label = label,
+            Current = p.Current,
+            Incoming = p.Incoming,
+            Changed = p.Changed,
+            Apply = false
+        };
+}
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        _isViewer = authState.User.IsInRole("Viewer");
+    }
+}

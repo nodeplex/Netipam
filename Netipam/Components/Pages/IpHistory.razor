@@ -1,0 +1,234 @@
+@page "/ip-history"
+@rendermode InteractiveServer
+
+@using Microsoft.EntityFrameworkCore
+@using MudBlazor
+@using Netipam.Data
+
+@inject AppDbContext DbContext
+
+<MudStack Spacing="2">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <MudText Typo="Typo.h6">IP History</MudText>
+        <MudSpacer />
+        <MudDateRangePicker Dense="true"
+                            Placeholder="Date range"
+                            Clearable="true"
+                            @bind-DateRange="dateRange" />
+        <MudSelect T="int?"
+                   Dense="true"
+                   Placeholder="Subnet"
+                   Clearable="true"
+                   @bind-Value="subnetIdFilter"
+                   Style="min-width:200px;">
+            @foreach (var s in subnets)
+            {
+                <MudSelectItem T="int?" Value="@s.Id">@SubnetDisplay(s)</MudSelectItem>
+            }
+        </MudSelect>
+        <MudTextField T="string"
+                      Dense="true"
+                      Placeholder="Search (IP, device, MAC, hostname, source...)"
+                      Adornment="Adornment.Start"
+                      AdornmentIcon="@Icons.Material.Filled.Search"
+                      Immediate="true"
+                      Class="ms-2"
+                      @bind-Value="search" />
+        @if (loading || isRefreshing)
+        {
+            <MudProgressCircular Indeterminate="true" Size="Size.Small" Class="toolbar-button download-icon-btn" Style="width:26px;height:26px;" />
+        }
+        else
+        {
+            <MudIconButton Icon="@Icons.Material.Filled.Refresh"
+                           Title="Refresh"
+                           Size="Size.Medium"
+                           Class="toolbar-button download-icon-btn"
+                           OnClick="ReloadWithSpinner" />
+        }
+        <MudMenu Dense="true" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight" Class="download-menu">
+            <ActivatorContent>
+                <MudIconButton Icon="@Icons.Material.Filled.Download"
+                               Title="Export"
+                               Size="Size.Medium"
+                               Class="toolbar-button download-icon-btn" />
+            </ActivatorContent>
+            <ChildContent>
+                <MudMenuItem Href="/export/ip-history.xlsx">Export IP History</MudMenuItem>
+            </ChildContent>
+        </MudMenu>
+    </MudStack>
+
+    @if (loading)
+    {
+        <MudProgressLinear Indeterminate="true" />
+    }
+    else if (FilteredHistory.Count == 0)
+    {
+        <MudText Typo="Typo.body2">No IP history in the selected range.</MudText>
+    }
+    else
+    {
+        <MudTable T="DeviceIpHistory"
+                  Items="@FilteredHistory"
+                  FixedHeader="true"
+                  Height="calc(100vh - 130px)"
+                  Dense="true"
+                  Hover="true"
+                  Bordered="true"
+                  Striped="true">
+            <HeaderContent>
+                <MudTh style="width:160px;">
+                    <MudTableSortLabel SortBy="@(new Func<DeviceIpHistory, object>(h => GetIpSortKey(h)))">
+                        IP
+                    </MudTableSortLabel>
+                </MudTh>
+                <MudTh>Device</MudTh>
+                <MudTh>MAC</MudTh>
+                <MudTh>Type</MudTh>
+                <MudTh>First Seen</MudTh>
+                <MudTh>Last Seen</MudTh>
+                <MudTh>Source</MudTh>
+            </HeaderContent>
+            <RowTemplate Context="h">
+                <MudTd DataLabel="IP">@FormatIpHistory(h)</MudTd>
+                <MudTd DataLabel="Device">@h.Device?.Name</MudTd>
+                <MudTd DataLabel="MAC">@h.Device?.MacAddress</MudTd>
+                <MudTd DataLabel="Type">@h.Device?.ClientType?.Name</MudTd>
+                <MudTd DataLabel="First Seen">@FormatUtc(h.FirstSeenUtc)</MudTd>
+                <MudTd DataLabel="Last Seen">@(h.LastSeenUtc is null ? "Current" : FormatUtc(h.LastSeenUtc.Value))</MudTd>
+                <MudTd DataLabel="Source">@h.Source</MudTd>
+            </RowTemplate>
+        </MudTable>
+    }
+</MudStack>
+
+<style>
+    .download-icon-btn {
+        height: 26px;
+        width: 26px;
+        padding: 0;
+    }
+
+    .download-menu {
+        margin-right: 20px;
+    }
+</style>
+
+@code {
+    private bool loading = true;
+    private bool isRefreshing;
+    private List<DeviceIpHistory> history = new();
+    private List<Subnet> subnets = new();
+    private string? search;
+    private DateRange? dateRange = new(DateTime.Today.AddDays(-30), DateTime.Today);
+    private int? subnetIdFilter;
+
+    protected override async Task OnInitializedAsync()
+        => await Reload();
+
+    private async Task ReloadWithSpinner()
+    {
+        if (isRefreshing)
+            return;
+
+        isRefreshing = true;
+        await Reload();
+        await Task.Delay(300);
+        isRefreshing = false;
+    }
+
+    private async Task Reload()
+    {
+        loading = true;
+
+        history = await DbContext.DeviceIpHistories
+            .AsNoTracking()
+            .Include(h => h.Device)
+                .ThenInclude(d => d!.ClientType)
+            .Include(h => h.Device)
+                .ThenInclude(d => d!.Subnet)
+            .OrderByDescending(h => h.FirstSeenUtc)
+            .ToListAsync();
+
+        subnets = await DbContext.Subnets
+            .AsNoTracking()
+            .OrderBy(s => s.Name)
+            .ToListAsync();
+
+        loading = false;
+    }
+
+    private List<DeviceIpHistory> FilteredHistory
+    {
+        get
+        {
+            var range = GetDateRangeUtc();
+            return history
+                .Where(h =>
+                    (!HasDateRange || (range is not null && OverlapsRange(h, range.Value))) &&
+                    (!HasSubnetFilter || h.Device?.SubnetId == subnetIdFilter) &&
+                    (!HasSearch || Matches(h, search!)))
+                .ToList();
+        }
+    }
+
+    private bool HasSearch => !string.IsNullOrWhiteSpace(search);
+
+    private bool HasDateRange
+        => dateRange?.Start is not null && dateRange?.End is not null;
+
+    private bool HasSubnetFilter => subnetIdFilter is not null;
+
+    private static string SubnetDisplay(Subnet s)
+        => string.IsNullOrWhiteSpace(s.Cidr) ? s.Name : $"{s.Name} ({s.Cidr})";
+
+    private (DateTime StartUtc, DateTime EndUtcExclusive)? GetDateRangeUtc()
+    {
+        if (!HasDateRange)
+            return null;
+
+        var startLocal = dateRange!.Start!.Value.Date;
+        var endLocalExclusive = dateRange.End!.Value.Date.AddDays(1);
+
+        var startUtc = DateTime.SpecifyKind(startLocal, DateTimeKind.Local).ToUniversalTime();
+        var endUtc = DateTime.SpecifyKind(endLocalExclusive, DateTimeKind.Local).ToUniversalTime();
+
+        return (startUtc, endUtc);
+    }
+
+    private static bool OverlapsRange(DeviceIpHistory h, (DateTime StartUtc, DateTime EndUtcExclusive) range)
+    {
+        var end = h.LastSeenUtc ?? DateTime.UtcNow;
+        return h.FirstSeenUtc < range.EndUtcExclusive && end >= range.StartUtc;
+    }
+
+    private static bool Matches(DeviceIpHistory h, string term)
+        => Contains(h.IpAddress, term)
+           || Contains(h.Source, term)
+           || Contains(h.Device?.Name, term)
+           || Contains(h.Device?.Hostname, term)
+           || Contains(h.Device?.MacAddress, term)
+           || Contains(h.Device?.ClientType?.Name, term);
+
+    private static string FormatIpHistory(DeviceIpHistory h)
+        => h.Port is null ? h.IpAddress : $"{h.IpAddress}:{h.Port}";
+
+    private static string FormatUtc(DateTime utc)
+        => DateTime.SpecifyKind(utc, DateTimeKind.Utc).ToLocalTime().ToString("MM-dd-yyyy HH:mm");
+
+    private static long GetIpSortKey(DeviceIpHistory h)
+    {
+        if (IpCidr.TryParseIPv4(h.IpAddress, out var ipUInt, out _))
+        {
+            var port = h.Port ?? 0;
+            return ((long)ipUInt << 16) + port;
+        }
+
+        return long.MaxValue;
+    }
+
+    private static bool Contains(string? value, string term)
+        => !string.IsNullOrWhiteSpace(value) &&
+           value.Contains(term, StringComparison.OrdinalIgnoreCase);
+}

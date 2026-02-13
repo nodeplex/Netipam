@@ -1,0 +1,314 @@
+@page "/access-panel"
+@rendermode InteractiveServer
+
+@using Microsoft.EntityFrameworkCore
+@using MudBlazor
+@using Netipam.Data
+@using System.Security.Claims
+@using Microsoft.AspNetCore.Components.Authorization
+
+@inject AppDbContext DbContext
+@inject IDialogService DialogService
+@inject AuthenticationStateProvider AuthStateProvider
+
+<MudStack Spacing="2">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+        <MudText Typo="Typo.h6">Access Panel</MudText>
+        <MudSpacer />
+        <MudTooltip Text="Arrange categories and tiles">
+            <MudIconButton Icon="@Icons.Material.Filled.Sort"
+                           Color="Color.Default"
+                           OnClick="OpenArrangeDialog" />
+        </MudTooltip>
+        <MudTooltip Text="Manage access categories">
+            <MudIconButton Icon="@Icons.Material.Filled.Category"
+                           Color="Color.Default"
+                           Class="category-icon"
+                           OnClick="OpenAccessCategories" />
+        </MudTooltip>
+    </MudStack>
+
+    @if (devices.Count == 0)
+    {
+        <MudPaper Class="pa-3">
+            <MudText Typo="Typo.body2">No devices with access links found.</MudText>
+        </MudPaper>
+    }
+    else
+    {
+        @foreach (var group in groups)
+        {
+            <MudStack Spacing="1" Class="mb-4">
+                <MudPaper Class="pa-2 access-category-header" Elevation="0">
+                    <MudText Typo="Typo.subtitle1" Class="access-category-title">@group.Name</MudText>
+                </MudPaper>
+                <MudDivider />
+                <MudGrid>
+                    @foreach (var d in group.Devices)
+                    {
+                        <MudItem xs="8" sm="4" md="3" lg="2">
+                            @{
+                                var hasLink = TryBuildAccessLink(d.AccessLink, out var href);
+                            }
+                            @if (hasLink)
+                            {
+                                <MudLink Href="@href"
+                                         Target="_blank"
+                                         Rel="noopener noreferrer"
+                                         Class="access-card-link">
+                                    <MudPaper Class="pa-3 access-card" Elevation="1">
+                                        <MudStack Spacing="1">
+                                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                                <MudIcon Icon="@GetTypeIcon(d)"
+                                                         Size="Size.Medium"
+                                                         Class="access-type-icon" />
+                                                <MudText Typo="Typo.subtitle1" Class="access-title">@d.Name</MudText>
+
+                                                <MudSpacer />
+
+                                                <MudChip T="string"
+                                                         Color="@StatusColor(d)"
+                                                         Variant="Variant.Filled"
+                                                         Size="Size.Small"
+                                                         Icon="@Icons.Material.Filled.Circle">
+                                                    @StatusText(d)
+                                                </MudChip>
+                                            </MudStack>
+
+                                            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="access-meta">
+                                                <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" />
+                                                <MudText Typo="Typo.caption">
+                                                    @SafeSecondary(d.ClientType?.Name, FormatIpWithPort(d))
+                                                </MudText>
+                                            </MudStack>
+                                        </MudStack>
+                                    </MudPaper>
+                                </MudLink>
+                            }
+                            else
+                            {
+                                <MudPaper Class="pa-3 access-card" Elevation="1">
+                                    <MudStack Spacing="1">
+                                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                            <MudIcon Icon="@GetTypeIcon(d)"
+                                                     Size="Size.Medium"
+                                                     Class="access-type-icon" />
+                                            <MudText Typo="Typo.subtitle1" Class="access-title">@d.Name</MudText>
+
+                                            <MudSpacer />
+
+                                            <MudChip T="string"
+                                                     Color="@StatusColor(d)"
+                                                     Variant="Variant.Filled"
+                                                     Size="Size.Small"
+                                                     Icon="@Icons.Material.Filled.Circle">
+                                                @StatusText(d)
+                                            </MudChip>
+                                        </MudStack>
+
+                                        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Class="access-meta">
+                                            <MudIcon Icon="@Icons.Material.Filled.Info" Size="Size.Small" />
+                                            <MudText Typo="Typo.caption">
+                                                @SafeSecondary(d.ClientType?.Name, FormatIpWithPort(d))
+                                            </MudText>
+                                        </MudStack>
+                                    </MudStack>
+                                </MudPaper>
+                            }
+                        </MudItem>
+                    }
+                </MudGrid>
+            </MudStack>
+        }
+    }
+</MudStack>
+
+<style>
+    .access-card {
+        height: 100%;
+        border: 1px solid rgba(0,0,0,0.06);
+        transition: transform 120ms ease, box-shadow 120ms ease;
+    }
+
+    .access-card-link {
+        display: block;
+        text-decoration: none;
+        color: inherit;
+    }
+
+    .access-card-link,
+    .access-card-link * {
+        text-decoration: none !important;
+    }
+
+    .access-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 18px rgba(0,0,0,0.08);
+    }
+
+    .access-title {
+        font-weight: 600;
+        font-size: 1rem;
+        line-height: 1.2;
+        color: var(--mud-palette-text-primary);
+    }
+
+    .access-type-icon {
+        color: var(--mud-palette-text-secondary);
+    }
+
+    .access-meta {
+        color: var(--mud-palette-text-secondary);
+    }
+
+    .access-category-header {
+        background-color: rgba(0,0,0,0.03);
+        border-left: 4px solid rgba(0,0,0,0.2);
+        border-radius: 6px;
+    }
+
+    .access-category-title {
+        letter-spacing: 0.2px;
+        font-weight: 600;
+    }
+
+    .category-icon {
+        margin-right: 20px;
+    }
+</style>
+
+@code {
+    private const string UncategorizedLabel = "Uncategorized";
+
+    private List<Device> devices = new();
+    private List<AccessCategoryGroup> groups = new();
+    private string? _userId;
+    private Dictionary<int, int> _categoryOrder = new();
+    private Dictionary<int, int> _itemOrder = new();
+
+    private static string StatusText(Device d)
+        => d.IsStatusTracked ? (d.IsOnline ? "Online" : "Offline") : "Not Tracked";
+
+    private static Color StatusColor(Device d)
+        => d.IsStatusTracked ? (d.IsOnline ? Color.Success : Color.Error) : Color.Default;
+
+    protected override async Task OnInitializedAsync()
+        => await LoadDevicesAsync();
+
+    private async Task LoadDevicesAsync()
+    {
+        _userId = await GetUserIdAsync();
+        devices = await DbContext.Devices
+            .Include(d => d.ClientType)
+            .Include(d => d.AccessCategory)
+            .Where(d => !string.IsNullOrWhiteSpace(d.AccessLink))
+            .OrderBy(d => d.Name)
+            .ToListAsync();
+
+        await LoadUserOrderAsync();
+        BuildGroups();
+    }
+
+    private async Task LoadUserOrderAsync()
+    {
+        _categoryOrder.Clear();
+        _itemOrder.Clear();
+
+        if (string.IsNullOrWhiteSpace(_userId))
+            return;
+
+        _categoryOrder = await DbContext.UserAccessCategoryOrders
+            .AsNoTracking()
+            .Where(o => o.UserId == _userId)
+            .ToDictionaryAsync(o => o.AccessCategoryId, o => o.SortOrder);
+
+        _itemOrder = await DbContext.UserAccessItemOrders
+            .AsNoTracking()
+            .Where(o => o.UserId == _userId)
+            .ToDictionaryAsync(o => o.DeviceId, o => o.SortOrder);
+    }
+
+    private void BuildGroups()
+    {
+        groups = devices
+            .GroupBy(d => d.AccessCategoryId)
+            .Select(g => new AccessCategoryGroup
+            {
+                AccessCategoryId = g.Key,
+                Name = string.IsNullOrWhiteSpace(g.First().AccessCategory?.Name)
+                    ? UncategorizedLabel
+                    : g.First().AccessCategory!.Name,
+                Devices = g
+                    .OrderBy(d => _itemOrder.TryGetValue(d.Id, out var order) ? order : int.MaxValue)
+                    .ThenBy(d => d.Name)
+                    .ToList()
+            })
+            .OrderBy(g => g.IsUncategorized ? 1 : 0)
+            .ThenBy(g => g.AccessCategoryId is not null && _categoryOrder.TryGetValue(g.AccessCategoryId.Value, out var order)
+                ? order
+                : int.MaxValue)
+            .ThenBy(g => g.Name)
+            .ToList();
+    }
+
+    private async Task OpenAccessCategories()
+    {
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = DialogService.Show<AccessCategoriesDialog>("Access Categories", options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+            await LoadDevicesAsync();
+    }
+
+    private async Task OpenArrangeDialog()
+    {
+        var options = new DialogOptions { CloseOnEscapeKey = true, MaxWidth = MaxWidth.Medium, FullWidth = true };
+        var dialog = DialogService.Show<AccessPanelOrderDialog>("Arrange Access Panel", options);
+        var result = await dialog.Result;
+
+        if (!result.Canceled)
+            await LoadDevicesAsync();
+    }
+
+    private async Task<string?> GetUserIdAsync()
+    {
+        var authState = await AuthStateProvider.GetAuthenticationStateAsync();
+        var user = authState.User;
+        return user.FindFirstValue(ClaimTypes.NameIdentifier);
+    }
+
+    private sealed class AccessCategoryGroup
+    {
+        public int? AccessCategoryId { get; set; }
+        public string Name { get; set; } = "";
+        public List<Device> Devices { get; set; } = new();
+        public bool IsUncategorized => AccessCategoryId is null;
+    }
+
+    private static string GetTypeIcon(Device d)
+    {
+        var overrideIcon = d.ClientType?.Icon;
+        if (!string.IsNullOrWhiteSpace(overrideIcon))
+            return overrideIcon;
+
+        var name = d.ClientType?.Name ?? "";
+        var n = name.ToLowerInvariant();
+
+        if (n.Contains("router") || n.Contains("gateway")) return Icons.Material.Filled.Router;
+        if (n.Contains("switch")) return Icons.Material.Filled.SettingsEthernet;
+        if (n.Contains("ap") || n.Contains("access point") || n.Contains("wireless")) return Icons.Material.Filled.Wifi;
+        if (n.Contains("nas") || n.Contains("storage")) return Icons.Material.Filled.Storage;
+        if (n.Contains("server")) return Icons.Material.Filled.Dns;
+        if (n.Contains("nvr")) return Icons.Material.Filled.VideoLibrary;
+        if (n.Contains("camera")) return Icons.Material.Filled.Videocam;
+        if (n.Contains("printer")) return Icons.Material.Filled.Print;
+        if (n.Contains("laptop")) return Icons.Material.Filled.Laptop;
+        if (n.Contains("phone")) return Icons.Material.Filled.PhoneIphone;
+        if (n.Contains("tablet")) return Icons.Material.Filled.TabletMac;
+        if (n.Contains("vm") || n.Contains("lxc") || n.Contains("container")) return Icons.Material.Filled.Memory;
+        if (n.Contains("pc")) return Icons.Material.Filled.Computer;
+
+        return Icons.Material.Filled.Devices;
+    }
+}

@@ -1,0 +1,14 @@
+services:
+  netipam:
+    image: nodeplex/netipam:latest
+    container_name: netipam
+    ports:
+      - "7088:7088"
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Production"
+      ASPNETCORE_URLS: "http://+:7088"
+      ConnectionStrings__Default: "Data Source=/data/Netipam.db"
+      Netipam__AutoMigrate: "true"
+      TZ: "America/New_York"
+    volumes:
+      - ./data:/data
