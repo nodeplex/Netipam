@@ -11,6 +11,8 @@ Prereqs: Docker + Docker Compose.
 
 #### Create a folder and add the compose file:
 
+  If you store your Docker containers in a different folder, adjust the /opt below accordingly
+  
   mkdir -p /opt/netipam
   Save docker-compose.yml in /opt/netipam
 
