@@ -46,7 +46,7 @@ else
             <MudItem xs="12" md="6">
                 <MudTextField T="string"
                               Label="Access URL"
-                              Placeholder="https://unifi.local:8443"
+                              Placeholder="https://xx.xx.xx.xx"
                               Immediate="true"
                               @bind-Value="model.UnifiBaseUrl"
                               @bind-Value:after="SaveAfterEdit" />
@@ -62,7 +62,7 @@ else
                            @bind-Value="model.UnifiAuthMode"
                            @bind-Value:after="OnUnifiAuthModeAfter">
                     <MudSelectItem T="string" Value="@("Session")">Session (username/password)</MudSelectItem>
-                    <MudSelectItem T="string" Value="@("ApiKey")">API key (X-API-KEY)</MudSelectItem>
+                    <MudSelectItem T="string" Value="@("ApiKey")">API Key</MudSelectItem>
                 </MudSelect>
             </MudItem>
 
