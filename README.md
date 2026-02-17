@@ -13,32 +13,32 @@ Prereqs: Docker + Docker Compose.
 
   If you store your Docker containers in a different folder, adjust the /opt below accordingly
   
-  mkdir -p /opt/netipam
-  Save docker-compose.yml in /opt/netipam
+  mkdir -p /opt/netipam<br>
+  Save docker-compose.yml in /opt/netipam<br>
 
 #### Start the container:
 
-  cd /opt/netipam
-  docker compose up -d
+  cd /opt/netipam<br>
+  docker compose up -d<br>
 
 #### Open the app:
 
-  Open Netipam: 
+  Open Netipam:<br>
   host-ip:7088 (xx.xx.xx.xx:7088)
 
 ## Synology (Container Manager)
 
-Create a folder on the NAS:
-Example: /volume1/docker/netipam
+Create a folder on the NAS:<br>
+Example: /volume1/docker/netipam<br>
 
 Place docker-compose.yml in that folder (or you can upload when creating the project).
 
-Open Container Manager → Projects → Create.
+Open Container Manager → Projects → Create.<br>
 
-Select the folder and compose file (or upload it), then deploy.
+Select the folder and compose file (or upload it), then deploy.<br>
 
-Open Netipam: 
-nas-ip:7088 (xx.xx.xx.xx:7088)
+Open Netipam:<br> 
+nas-ip:7088 (xx.xx.xx.xx:7088)<br>
 
 ### Port choice
 
