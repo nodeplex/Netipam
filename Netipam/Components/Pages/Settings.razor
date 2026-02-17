@@ -4,21 +4,27 @@
 @using Netipam.Data
 @using Netipam.Services
 @using Netipam.Unifi
+@using Netipam.Proxmox
 @using Netipam.Components.Layout
 @using MudBlazor
+@using Microsoft.EntityFrameworkCore
 @using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Identity
 @using Microsoft.AspNetCore.Components.Forms
+@using System.Text.Json
 
 @inject AppSettingsService SettingsService
 @inject UnifiUpdaterControl UnifiUpdater
+@inject ProxmoxUpdaterControl ProxmoxUpdater
 @inject UnifiApiClient UnifiClient
+@inject ProxmoxApiClient ProxmoxClient
 @inject ISnackbar Snackbar
 @inject IDialogService DialogService
 @inject AuthenticationStateProvider AuthStateProvider
 @inject UserManager<ApplicationUser> UserManager
 @inject DatabaseResetService DatabaseResetService
 @inject BackupService BackupService
+@inject AppDbContext DbContext
 
 @if (_isViewer)
 {
@@ -151,7 +157,7 @@ else
          UniFi Online Status Updater
          ----------------------------- -->
     <MudPaper Class="pa-3 mt-2" Elevation="1">
-        <MudText Typo="Typo.h6">UniFi Online Status Updater</MudText>
+        <MudText Typo="Typo.h6">UniFi Status Updater</MudText>
 
         <MudGrid Class="mt-2" Spacing="2">
             <MudItem xs="12" sm="6" md="4">
@@ -284,6 +290,153 @@ else
     </MudPaper>
 
     <!-- -----------------------------
+         Proxmox Host Mapping
+         ----------------------------- -->
+    <MudPaper Class="pa-3 mt-2" Elevation="1">
+        <MudText Typo="Typo.h6">Proxmox Host Profiles</MudText>
+        <MudText Typo="Typo.caption">
+            Manage your Proxmox server profiles. Proxmox server profiles can then be added to existing devices to automap hosts-guest relationships.
+        </MudText>
+
+        <MudGrid Class="mt-2" Spacing="2">
+            <MudItem xs="12" md="6">
+                <MudSelect T="int?"
+                           Label="Profile Instance"
+                           Value="@selectedProxmoxProfileId"
+                           ValueChanged="OnProxmoxProfileChanged"
+                           Clearable="true"
+                           Dense="true">
+                    @foreach (var p in proxmoxProfiles)
+                    {
+                        <MudSelectItem T="int?" Value="@p.Id">@p.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+
+            <MudItem xs="12" md="6">
+                <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+                    <MudButton Variant="Variant.Outlined"
+                               Size="Size.Small"
+                               OnClick="CreateNewProxmoxProfile">
+                        New Profile
+                    </MudButton>
+                    <MudButton Variant="Variant.Outlined"
+                               Size="Size.Small"
+                               Color="Color.Error"
+                               Disabled="@(selectedProxmoxProfileId is null)"
+                               OnClick="DeleteProxmoxProfile">
+                        Delete Profile
+                    </MudButton>
+                </MudStack>
+            </MudItem>
+
+            <MudItem xs="12" sm="6" md="4">
+                <MudTextField T="string"
+                              Label="Profile Name"
+                              Placeholder="Proxmox Server Name"
+                              Immediate="true"
+                              @bind-Value="proxmoxEditor.Name" />
+            </MudItem>
+
+            <MudItem xs="12" sm="6" md="4">
+                <MudNumericField T="int"
+                                 Label="Interval (seconds)"
+                                 Min="30"
+                                 Max="86400"
+                                 Step="5"
+                                 Immediate="true"
+                                 @bind-Value="proxmoxEditor.IntervalSeconds" />
+            </MudItem>
+
+            <MudItem xs="12" md="6">
+                <MudTextField T="string"
+                              Label="Proxmox URL"
+                              Placeholder="https://proxmox.local:8006"
+                              Immediate="true"
+                              @bind-Value="proxmoxEditor.BaseUrl" />
+            </MudItem>
+
+            <MudItem xs="12" md="6">
+                <MudTextField T="string"
+                              Label="API Token ID"
+                              Placeholder="user@pve!tokenId (ie:root@pam!netipam)"
+                              Immediate="true"
+                              @bind-Value="proxmoxEditor.ApiTokenId" />
+            </MudItem>
+
+            <MudItem xs="12" md="6">
+                <MudTextField T="string"
+                              Label="API Token Secret"
+                              InputType="InputType.Password"
+                              Immediate="true"
+                              Value="@proxmoxEditorTokenPlain"
+                              ValueChanged="OnProxmoxEditorTokenChanged" />
+
+                <MudStack Row="true" Spacing="1" Class="mt-2">
+                    <MudButton Variant="Variant.Outlined"
+                               Size="Size.Small"
+                               Disabled="@(string.IsNullOrWhiteSpace(proxmoxEditor.ApiTokenSecretProtected) && string.IsNullOrWhiteSpace(proxmoxEditorTokenPlain))"
+                               OnClick="ClearProxmoxEditorToken">
+                        Clear saved token secret
+                    </MudButton>
+                </MudStack>
+            </MudItem>
+
+            <MudItem xs="12">
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" sm="4" md="4">
+                        <MudSwitch T="bool"
+                                   Color="Color.Primary"
+                                   Label="Enabled"
+                                   @bind-Value="proxmoxEditor.Enabled" />
+                    </MudItem>
+
+                    <MudItem xs="12" sm="4" md="4">
+                        <MudSwitch T="bool"
+                                   Color="Color.Primary"
+                                   Label="Update existing host assignments"
+                                   @bind-Value="proxmoxEditor.UpdateExistingHostAssignments" />
+                    </MudItem>
+
+                    <MudItem xs="12" sm="4" md="4">
+                        <MudSwitch T="bool"
+                                   Color="Color.Primary"
+                                   Label="Update guest client type"
+                                   @bind-Value="proxmoxEditor.UpdateGuestClientType" />
+                    </MudItem>
+                </MudGrid>
+            </MudItem>
+
+            <MudItem xs="12">
+                <MudStack Row="true" Spacing="2" AlignItems="AlignItems.Center">
+                    <MudButton Variant="Variant.Filled"
+                               Size="Size.Small"
+                               Style="font-size:0.8rem;"
+                               Color="Color.Primary"
+                               Disabled="@proxmoxProfileBusy"
+                               OnClick="SaveProxmoxProfile">
+                        Save profile
+                    </MudButton>
+
+                    <MudButton Variant="Variant.Filled"
+                               Size="Size.Small"
+                               Style="font-size:0.8rem;"
+                               Color="Color.Primary"
+                               Disabled="@proxmoxTestBusy"
+                               OnClick="TestProxmoxConnection">
+                        Test Proxmox connection
+                    </MudButton>
+
+                    @if (!string.IsNullOrWhiteSpace(proxmoxTestStatus))
+                    {
+                        <MudText Typo="Typo.caption">@proxmoxTestStatus</MudText>
+                    }
+                </MudStack>
+            </MudItem>
+        </MudGrid>
+    </MudPaper>
+
+    <!-- -----------------------------
          UI
          ----------------------------- -->
     <MudPaper Class="pa-3 mt-2" Elevation="1">
@@ -359,15 +512,6 @@ else
             </MudItem>
         </MudGrid>
     </MudPaper>
-
-    <MudStack Row="true" Spacing="2" Class="mt-3">
-        <MudButton Variant="Variant.Filled" Size="Size.Small" Style="font-size:0.8rem;" Color="Color.Primary" OnClick="Save">
-            Save
-        </MudButton>
-        <MudButton Variant="Variant.Outlined" Size="Size.Small" Style="font-size:0.8rem;" OnClick="Reload">
-            Reload
-        </MudButton>
-    </MudStack>
 
     <AuthorizeView Roles="Admin">
         <MudPaper Class="pa-3 mt-4" Elevation="1">
@@ -472,8 +616,15 @@ else
 
     private string? _unifiPasswordPlain; // plain only in UI memory
     private string? _unifiApiKeyPlain; // plain only in UI memory
+    private List<ProxmoxInstance> proxmoxProfiles = new();
+    private int? selectedProxmoxProfileId;
+    private ProxmoxInstance proxmoxEditor = NewProxmoxEditor();
+    private string? proxmoxEditorTokenPlain;
+    private bool proxmoxProfileBusy;
     private bool testBusy;
     private string? testStatus;
+    private bool proxmoxTestBusy;
+    private string? proxmoxTestStatus;
     private string? resetConfirmText;
     private string? resetPassword;
     private bool resetBusy;
@@ -483,6 +634,9 @@ else
     private string? backupStatus;
     private bool backupBusy;
     private bool _isViewer;
+    private readonly object _proxmoxTriggerLock = new();
+    private CancellationTokenSource? _proxmoxTriggerCts;
+    private const int ProxmoxEnableTransitionDelaySeconds = 30;
 
     protected override async Task OnInitializedAsync()
     {
@@ -495,11 +649,14 @@ else
         // NEW: re-render when updater status changes (background service)
         UnifiUpdater.StatusChanged += OnUpdaterStatusChanged;
 
+        await EnsureProxmoxClientTypesAsync();
+
         model = await SettingsService.LoadAsync();
         model.ThemeName = MainLayout.NormalizeThemeName(model.ThemeName);
         model.UnifiAuthMode = NormalizeUnifiAuthMode(model.UnifiAuthMode);
         _unifiPasswordPlain = SettingsService.Unprotect(model.UnifiPasswordProtected);
         _unifiApiKeyPlain = SettingsService.Unprotect(model.UnifiApiKeyProtected);
+        await LoadProxmoxProfilesAsync();
     }
 
     private void OnUpdaterStatusChanged()
@@ -510,6 +667,12 @@ else
     public void Dispose()
     {
         UnifiUpdater.StatusChanged -= OnUpdaterStatusChanged;
+        lock (_proxmoxTriggerLock)
+        {
+            _proxmoxTriggerCts?.Cancel();
+            _proxmoxTriggerCts?.Dispose();
+            _proxmoxTriggerCts = null;
+        }
     }
 
     private Task OnSiteTitleChanged()
@@ -593,6 +756,7 @@ else
         model.UnifiAuthMode = NormalizeUnifiAuthMode(model.UnifiAuthMode);
         _unifiPasswordPlain = SettingsService.Unprotect(model.UnifiPasswordProtected);
         _unifiApiKeyPlain = SettingsService.Unprotect(model.UnifiApiKeyProtected);
+        await LoadProxmoxProfilesAsync();
 
         Snackbar.Add("Settings reloaded.", Severity.Info);
         await InvokeAsync(StateHasChanged);
@@ -674,8 +838,376 @@ else
         }
     }
 
+    private async Task TestProxmoxConnection()
+    {
+        if (proxmoxTestBusy) return;
+        proxmoxTestBusy = true;
+        proxmoxTestStatus = null;
+
+        try
+        {
+            var baseUrl = proxmoxEditor.BaseUrl?.Trim();
+            var tokenId = proxmoxEditor.ApiTokenId?.Trim();
+            var tokenSecret = proxmoxEditorTokenPlain;
+
+            if (string.IsNullOrWhiteSpace(tokenSecret))
+                tokenSecret = SettingsService.Unprotect(proxmoxEditor.ApiTokenSecretProtected);
+
+            using var doc = await ProxmoxClient.GetVmResourcesAsync(
+                baseUrl ?? "",
+                tokenId ?? "",
+                tokenSecret ?? "");
+
+            var count = 0;
+            if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                doc.RootElement.TryGetProperty("data", out var data) &&
+                data.ValueKind == JsonValueKind.Array)
+            {
+                count = data.GetArrayLength();
+            }
+
+            proxmoxTestStatus = $"Success — Proxmox responded with {count} VM/CT resource rows.";
+            Snackbar.Add("Proxmox connection test succeeded.", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            proxmoxTestStatus = $"Failed — {ex.Message}";
+            Snackbar.Add($"Proxmox connection test failed: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            proxmoxTestBusy = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private static ProxmoxInstance NewProxmoxEditor()
+        => new()
+        {
+            Enabled = true,
+            IntervalSeconds = 300,
+            UpdateExistingHostAssignments = true,
+            UpdateGuestClientType = true
+        };
+
+    private async Task LoadProxmoxProfilesAsync()
+    {
+        proxmoxProfiles = await DbContext.ProxmoxInstances
+            .AsNoTracking()
+            .OrderBy(p => p.Name)
+            .ToListAsync();
+
+        if (selectedProxmoxProfileId is not null &&
+            proxmoxProfiles.Any(p => p.Id == selectedProxmoxProfileId.Value))
+        {
+            var selected = proxmoxProfiles.First(p => p.Id == selectedProxmoxProfileId.Value);
+            SetProxmoxEditor(selected);
+            return;
+        }
+
+        if (proxmoxProfiles.Count > 0)
+        {
+            var first = proxmoxProfiles[0];
+            selectedProxmoxProfileId = first.Id;
+            SetProxmoxEditor(first);
+            return;
+        }
+
+        selectedProxmoxProfileId = null;
+        proxmoxEditor = NewProxmoxEditor();
+        proxmoxEditorTokenPlain = null;
+    }
+
+    private Task OnProxmoxProfileChanged(int? profileId)
+    {
+        selectedProxmoxProfileId = profileId;
+
+        if (profileId is null)
+        {
+            proxmoxEditor = NewProxmoxEditor();
+            proxmoxEditorTokenPlain = null;
+            return Task.CompletedTask;
+        }
+
+        var selected = proxmoxProfiles.FirstOrDefault(p => p.Id == profileId.Value);
+        if (selected is null)
+        {
+            proxmoxEditor = NewProxmoxEditor();
+            proxmoxEditorTokenPlain = null;
+            selectedProxmoxProfileId = null;
+            return Task.CompletedTask;
+        }
+
+        SetProxmoxEditor(selected);
+        return Task.CompletedTask;
+    }
+
+    private void CreateNewProxmoxProfile()
+    {
+        selectedProxmoxProfileId = null;
+        proxmoxEditor = NewProxmoxEditor();
+        proxmoxEditorTokenPlain = null;
+        proxmoxTestStatus = null;
+    }
+
+    private async Task SaveProxmoxProfile()
+    {
+        if (proxmoxProfileBusy)
+            return;
+
+        proxmoxEditor.Name = proxmoxEditor.Name?.Trim() ?? "";
+        proxmoxEditor.BaseUrl = proxmoxEditor.BaseUrl?.Trim() ?? "";
+        proxmoxEditor.ApiTokenId = proxmoxEditor.ApiTokenId?.Trim() ?? "";
+        proxmoxEditor.IntervalSeconds = NormalizeProxmoxInterval(proxmoxEditor.IntervalSeconds);
+
+        if (string.IsNullOrWhiteSpace(proxmoxEditor.Name))
+        {
+            Snackbar.Add("Proxmox profile name is required.", Severity.Warning);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(proxmoxEditor.BaseUrl))
+        {
+            Snackbar.Add("Proxmox URL is required.", Severity.Warning);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(proxmoxEditor.ApiTokenId))
+        {
+            Snackbar.Add("Proxmox API token ID is required.", Severity.Warning);
+            return;
+        }
+
+        if (selectedProxmoxProfileId is null &&
+            string.IsNullOrWhiteSpace(proxmoxEditorTokenPlain) &&
+            string.IsNullOrWhiteSpace(proxmoxEditor.ApiTokenSecretProtected))
+        {
+            Snackbar.Add("Proxmox API token secret is required for new profiles.", Severity.Warning);
+            return;
+        }
+
+        proxmoxProfileBusy = true;
+        try
+        {
+            ProxmoxInstance entity;
+            bool shouldTriggerUpdater = false;
+            var isNewProfile = selectedProxmoxProfileId is null;
+
+            if (isNewProfile)
+            {
+                entity = new ProxmoxInstance();
+                DbContext.ProxmoxInstances.Add(entity);
+            }
+            else
+            {
+                entity = await DbContext.ProxmoxInstances
+                    .FirstAsync(p => p.Id == selectedProxmoxProfileId.Value);
+            }
+
+            var wasEnabled = entity.Enabled;
+
+            entity.Name = proxmoxEditor.Name;
+            entity.Enabled = proxmoxEditor.Enabled;
+            entity.BaseUrl = proxmoxEditor.BaseUrl;
+            entity.ApiTokenId = proxmoxEditor.ApiTokenId;
+            entity.IntervalSeconds = proxmoxEditor.IntervalSeconds;
+            entity.UpdateExistingHostAssignments = proxmoxEditor.UpdateExistingHostAssignments;
+            entity.UpdateGuestClientType = proxmoxEditor.UpdateGuestClientType;
+
+            if (!string.IsNullOrWhiteSpace(proxmoxEditorTokenPlain))
+            {
+                entity.ApiTokenSecretProtected = SettingsService.Protect(proxmoxEditorTokenPlain);
+            }
+            else if (string.IsNullOrWhiteSpace(proxmoxEditor.ApiTokenSecretProtected))
+            {
+                entity.ApiTokenSecretProtected = null;
+            }
+            else
+            {
+                entity.ApiTokenSecretProtected = proxmoxEditor.ApiTokenSecretProtected;
+            }
+
+            await DbContext.SaveChangesAsync();
+
+            shouldTriggerUpdater = entity.Enabled &&
+                                  (isNewProfile || !wasEnabled);
+
+            selectedProxmoxProfileId = entity.Id;
+            proxmoxEditor.ApiTokenSecretProtected = entity.ApiTokenSecretProtected;
+            proxmoxEditorTokenPlain = null;
+            await LoadProxmoxProfilesAsync();
+            Snackbar.Add("Proxmox profile saved.", Severity.Success);
+
+            if (shouldTriggerUpdater)
+            {
+                ScheduleProxmoxUpdaterTrigger();
+                Snackbar.Add(
+                    $"Proxmox mapping updater scheduled to run in ~{ProxmoxEnableTransitionDelaySeconds} seconds.",
+                    Severity.Info);
+            }
+        }
+        catch (DbUpdateException ex)
+        {
+            Snackbar.Add($"Unable to save Proxmox profile: {ex.GetBaseException().Message}", Severity.Error);
+        }
+        finally
+        {
+            proxmoxProfileBusy = false;
+        }
+    }
+
+    private async Task DeleteProxmoxProfile()
+    {
+        if (selectedProxmoxProfileId is null || proxmoxProfileBusy)
+            return;
+
+        var profileId = selectedProxmoxProfileId.Value;
+        var profileName = proxmoxProfiles.FirstOrDefault(p => p.Id == profileId)?.Name ?? $"#{profileId}";
+        var confirmed = await DialogService.ShowMessageBox(
+            title: "Delete Proxmox profile?",
+            message: $"Delete profile '{profileName}'? Devices marked as Proxmox host will keep their host flag but lose the instance link.",
+            yesText: "Delete",
+            cancelText: "Cancel");
+
+        if (confirmed != true)
+            return;
+
+        proxmoxProfileBusy = true;
+        try
+        {
+            var profile = await DbContext.ProxmoxInstances.FirstOrDefaultAsync(p => p.Id == profileId);
+            if (profile is null)
+                return;
+
+            DbContext.ProxmoxInstances.Remove(profile);
+            await DbContext.SaveChangesAsync();
+
+            await LoadProxmoxProfilesAsync();
+            Snackbar.Add("Proxmox profile deleted.", Severity.Warning);
+        }
+        finally
+        {
+            proxmoxProfileBusy = false;
+        }
+    }
+
+    private Task OnProxmoxEditorTokenChanged(string value)
+    {
+        proxmoxEditorTokenPlain = value;
+        return Task.CompletedTask;
+    }
+
+    private void ClearProxmoxEditorToken()
+    {
+        proxmoxEditorTokenPlain = null;
+        proxmoxEditor.ApiTokenSecretProtected = null;
+    }
+
+    private void SetProxmoxEditor(ProxmoxInstance profile)
+    {
+        proxmoxEditor = new ProxmoxInstance
+        {
+            Id = profile.Id,
+            Name = profile.Name,
+            Enabled = profile.Enabled,
+            BaseUrl = profile.BaseUrl,
+            ApiTokenId = profile.ApiTokenId,
+            ApiTokenSecretProtected = profile.ApiTokenSecretProtected,
+            IntervalSeconds = NormalizeProxmoxInterval(profile.IntervalSeconds),
+            UpdateExistingHostAssignments = profile.UpdateExistingHostAssignments,
+            UpdateGuestClientType = profile.UpdateGuestClientType
+        };
+        proxmoxEditorTokenPlain = null;
+    }
+
+    private static int NormalizeProxmoxInterval(int value)
+        => value <= 0 ? 300 : Math.Clamp(value, 30, 86400);
+
+    private void ScheduleProxmoxUpdaterTrigger()
+    {
+        CancellationTokenSource cts;
+        lock (_proxmoxTriggerLock)
+        {
+            _proxmoxTriggerCts?.Cancel();
+            _proxmoxTriggerCts?.Dispose();
+            _proxmoxTriggerCts = new CancellationTokenSource();
+            cts = _proxmoxTriggerCts;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(ProxmoxEnableTransitionDelaySeconds), cts.Token);
+                if (!cts.Token.IsCancellationRequested)
+                    ProxmoxUpdater.TriggerNow();
+            }
+            catch (OperationCanceledException)
+            {
+                // expected when a newer save supersedes this trigger
+            }
+        }, cts.Token);
+    }
+
     private static string NormalizeUnifiAuthMode(string? mode)
         => string.Equals(mode?.Trim(), "ApiKey", StringComparison.OrdinalIgnoreCase) ? "ApiKey" : "Session";
+
+    private async Task EnsureProxmoxClientTypesAsync()
+    {
+        var existing = await DbContext.ClientTypes.ToListAsync();
+        var byName = existing.ToDictionary(t => t.Name.Trim(), t => t, StringComparer.OrdinalIgnoreCase);
+        var addedOrUpdated = false;
+
+        if (!byName.TryGetValue("Proxmox Server", out var proxmoxServer))
+        {
+            DbContext.ClientTypes.Add(new ClientType
+            {
+                Name = "Proxmox Server",
+                IsDevice = true,
+                IsHost = true
+            });
+            addedOrUpdated = true;
+        }
+        else
+        {
+            if (!proxmoxServer.IsDevice)
+            {
+                proxmoxServer.IsDevice = true;
+                addedOrUpdated = true;
+            }
+
+            if (!proxmoxServer.IsHost)
+            {
+                proxmoxServer.IsHost = true;
+                addedOrUpdated = true;
+            }
+        }
+
+        if (!byName.ContainsKey("Proxmox VM"))
+        {
+            DbContext.ClientTypes.Add(new ClientType
+            {
+                Name = "Proxmox VM",
+                IsDevice = false,
+                IsHost = false
+            });
+            addedOrUpdated = true;
+        }
+
+        if (!byName.ContainsKey("Proxmox LXC"))
+        {
+            DbContext.ClientTypes.Add(new ClientType
+            {
+                Name = "Proxmox LXC",
+                IsDevice = false,
+                IsHost = false
+            });
+            addedOrUpdated = true;
+        }
+
+        if (addedOrUpdated)
+            await DbContext.SaveChangesAsync();
+    }
 
     private void OnBackupFileSelected(InputFileChangeEventArgs e)
     {

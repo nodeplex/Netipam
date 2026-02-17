@@ -18,13 +18,13 @@
 
             <MudPaper Class="pa-3" Elevation="0">
                 <MudText Typo="Typo.subtitle2" Class="mb-2">Categories</MudText>
-                @if (categoryRows.Count == 0)
-                {
-                    <MudText Typo="Typo.body2">No categories available.</MudText>
-                }
-                else
-                {
-                    <div class="drag-container" @ref="_categoryContainer">
+                <div class="drag-container" @ref="_categoryContainer">
+                    @if (categoryRows.Count == 0)
+                    {
+                        <MudText Typo="Typo.body2">No categories available.</MudText>
+                    }
+                    else
+                    {
                         @for (int i = 0; i < categoryRows.Count; i++)
                         {
                             var row = categoryRows[i];
@@ -37,8 +37,8 @@
                                 </MudStack>
                             </div>
                         }
-                    </div>
-                }
+                    }
+                </div>
                 <MudText Typo="Typo.caption" Class="mt-2">
                     Uncategorized items always stay at the end.
                 </MudText>

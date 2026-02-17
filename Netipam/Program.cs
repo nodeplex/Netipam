@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using MudBlazor.Services;
 using Netipam.Components;
 using Netipam.Data;
+using Netipam.Proxmox;
 using Netipam.Services;
 using Netipam.Unifi;
 using System.Net;
@@ -17,9 +18,11 @@ var builder = WebApplication.CreateBuilder(args);
 // Services
 // --------------------
 builder.Services.AddSingleton<UnifiUpdaterControl>();
+builder.Services.AddSingleton<ProxmoxUpdaterControl>();
 builder.Services.AddSingleton<AppSettingsService>();
 builder.Services.AddSingleton<PingStatusService>();
 builder.Services.AddHostedService<UnifiOnlineStatusUpdater>();
+builder.Services.AddHostedService<ProxmoxHostMappingUpdater>();
 builder.Services.AddScoped<UiSessionStateService>();
 builder.Services.AddScoped<DatabaseResetService>();
 builder.Services.AddScoped<BackupService>();
@@ -108,6 +111,7 @@ builder.Services.AddAuthorization(options =>
 // UniFi options + client
 // --------------------
 builder.Services.Configure<UnifiOptions>(builder.Configuration.GetSection("Unifi"));
+builder.Services.Configure<ProxmoxOptions>(builder.Configuration.GetSection("Proxmox"));
 builder.Services.AddHttpClient<UnifiApiClient>()
     .ConfigurePrimaryHttpMessageHandler(() =>
     {
@@ -115,6 +119,15 @@ builder.Services.AddHttpClient<UnifiApiClient>()
         {
             CookieContainer = new CookieContainer(),
             UseCookies = true,
+            ServerCertificateCustomValidationCallback =
+                HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+        };
+    });
+builder.Services.AddHttpClient<ProxmoxApiClient>()
+    .ConfigurePrimaryHttpMessageHandler(() =>
+    {
+        return new HttpClientHandler
+        {
             ServerCertificateCustomValidationCallback =
                 HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
         };

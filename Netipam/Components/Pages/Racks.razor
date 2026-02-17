@@ -111,7 +111,7 @@
 
                             @if (row.Device is not null)
                             {
-                                <div class="rack-cell device-cell @(row.IsOverlap ? "overlap" : "")" style="@($"grid-row: span {row.RowSpan};")">
+                                <div class="rack-cell device-cell device-start @(row.RowSpan > 1 ? "multi-start" : "") @(row.IsOverlap ? "overlap" : "")" style="@($"grid-row: span {row.RowSpan};")">
                                     <div class="device-name">
                                         <MudTooltip Text="@GetStatusTooltip(row.Device)">
                                             <MudIcon Icon="@Icons.Material.Filled.Circle"
@@ -136,11 +136,11 @@
                                         <span class="u-size">@($"{row.RowSpan}U")</span>
                                     </div>
                                 </div>
-                                <div class="rack-cell device-cell @(row.IsOverlap ? "overlap" : "")" style="@($"grid-row: span {row.RowSpan};")">@row.Device.ClientType?.Name</div>
-                                <div class="rack-cell device-cell @(row.IsOverlap ? "overlap" : "")" style="@($"grid-row: span {row.RowSpan};")">@row.Device.IpAddress</div>
-                                <div class="rack-cell device-cell @(row.IsOverlap ? "overlap" : "")" style="@($"grid-row: span {row.RowSpan};")">@row.Device.Manufacturer</div>
-                                <div class="rack-cell device-cell @(row.IsOverlap ? "overlap" : "")" style="@($"grid-row: span {row.RowSpan};")">@row.Device.Model</div>
-                                <div class="rack-cell device-cell @(row.IsOverlap ? "overlap" : "")" style="@($"grid-row: span {row.RowSpan};")">
+                                <div class="rack-cell device-cell @(row.RowSpan > 1 ? "multi-start" : "") @(row.IsOverlap ? "overlap" : "")" style="@($"grid-row: span {row.RowSpan};")">@row.Device.ClientType?.Name</div>
+                                <div class="rack-cell device-cell @(row.RowSpan > 1 ? "multi-start" : "") @(row.IsOverlap ? "overlap" : "")" style="@($"grid-row: span {row.RowSpan};")">@row.Device.IpAddress</div>
+                                <div class="rack-cell device-cell @(row.RowSpan > 1 ? "multi-start" : "") @(row.IsOverlap ? "overlap" : "")" style="@($"grid-row: span {row.RowSpan};")">@row.Device.Manufacturer</div>
+                                <div class="rack-cell device-cell @(row.RowSpan > 1 ? "multi-start" : "") @(row.IsOverlap ? "overlap" : "")" style="@($"grid-row: span {row.RowSpan};")">@row.Device.Model</div>
+                                <div class="rack-cell device-cell device-end @(row.RowSpan > 1 ? "multi-start" : "") @(row.IsOverlap ? "overlap" : "")" style="@($"grid-row: span {row.RowSpan};")">
                                     @if (_canEdit)
                                     {
                                         <MudIconButton Icon="@Icons.Material.Filled.Edit"
@@ -158,14 +158,14 @@
                             }
                             else if (row.IsCovered)
                             {
-                                <div class="rack-cell covered-cell">
+                                <div class="rack-cell covered-cell covered-device covered-start @(row.IsCoveredEnd ? "covered-last" : "")">
                                     <span class="u-continued">↗</span>
                                 </div>
-                                <div class="rack-cell covered-cell"></div>
-                                <div class="rack-cell covered-cell"></div>
-                                <div class="rack-cell covered-cell"></div>
-                                <div class="rack-cell covered-cell"></div>
-                                <div class="rack-cell covered-cell"></div>
+                                <div class="rack-cell covered-cell covered-device @(row.IsCoveredEnd ? "covered-last" : "")"></div>
+                                <div class="rack-cell covered-cell covered-device @(row.IsCoveredEnd ? "covered-last" : "")"></div>
+                                <div class="rack-cell covered-cell covered-device @(row.IsCoveredEnd ? "covered-last" : "")"></div>
+                                <div class="rack-cell covered-cell covered-device @(row.IsCoveredEnd ? "covered-last" : "")"></div>
+                                <div class="rack-cell covered-cell covered-device covered-end @(row.IsCoveredEnd ? "covered-last" : "")"></div>
                             }
                             else
                             {
@@ -207,7 +207,7 @@
     .rack-table {
         display: grid;
         grid-auto-rows: 26px;
-        border: 1px solid rgba(0,0,0,0.12);
+        border: 1px solid var(--mud-palette-divider);
         border-radius: 6px;
         overflow: hidden;
     }
@@ -219,19 +219,23 @@
     }
 
     .rack-header {
-        background: rgba(0,0,0,0.04);
+        background: color-mix(in srgb, var(--mud-palette-surface) 80%, var(--mud-palette-divider) 20%);
         font-weight: 600;
     }
 
     .rack-row {
-        border-top: 1px dashed rgba(0,0,0,0.1);
+        border-top: 1px dashed var(--mud-palette-divider);
+    }
+
+    .rack-row.covered {
+        border-top: none;
     }
 
     .rack-cell {
         padding: 4px 8px;
         display: flex;
         align-items: center;
-        border-right: 1px solid rgba(0,0,0,0.06);
+        border-right: 1px solid color-mix(in srgb, var(--mud-palette-divider) 80%, transparent 20%);
         min-height: 26px;
     }
 
@@ -266,6 +270,46 @@
     .rack-cell.overlap {
         background: rgba(198, 40, 40, 0.12);
         border-color: rgba(198, 40, 40, 0.35);
+    }
+
+    .device-cell {
+        background: color-mix(in srgb, var(--mud-palette-background-grey) 90%, var(--mud-palette-surface) 10%);
+        border-top: 2px solid color-mix(in srgb, var(--mud-palette-text-primary) 35%, var(--mud-palette-divider) 65%);
+        border-bottom: 2px solid color-mix(in srgb, var(--mud-palette-text-primary) 35%, var(--mud-palette-divider) 65%);
+    }
+
+    .device-cell.multi-start {
+        border-bottom: none;
+    }
+
+    .device-cell.device-start {
+        border-left: 2px solid color-mix(in srgb, var(--mud-palette-text-primary) 35%, var(--mud-palette-divider) 65%);
+        border-top-left-radius: 6px;
+        border-bottom-left-radius: 6px;
+    }
+
+    .device-cell.device-end {
+        border-right: 2px solid color-mix(in srgb, var(--mud-palette-text-primary) 35%, var(--mud-palette-divider) 65%);
+        border-top-right-radius: 6px;
+        border-bottom-right-radius: 6px;
+    }
+
+    .covered-device {
+        background: color-mix(in srgb, var(--mud-palette-background-grey) 90%, var(--mud-palette-surface) 10%);
+        border-top: none;
+        border-bottom: none;
+    }
+
+    .covered-device.covered-start {
+        border-left: 2px solid color-mix(in srgb, var(--mud-palette-text-primary) 35%, var(--mud-palette-divider) 65%);
+    }
+
+    .covered-device.covered-end {
+        border-right: 2px solid color-mix(in srgb, var(--mud-palette-text-primary) 35%, var(--mud-palette-divider) 65%);
+    }
+
+    .covered-device.covered-last {
+        border-bottom: 2px solid color-mix(in srgb, var(--mud-palette-text-primary) 35%, var(--mud-palette-divider) 65%);
     }
 
     .u-size {
@@ -369,16 +413,21 @@
 
         var startMap = devices
             .Where(d => d.RackUPosition is not null && d.RackUSize is not null)
-            .GroupBy(d => d.RackUPosition!.Value)
+            .GroupBy(d => d.RackUPosition!.Value + Math.Max(1, d.RackUSize!.Value) - 1)
             .ToDictionary(g => g.Key, g => g.ToList());
 
         var covered = new HashSet<int>();
+        var coveredEnds = new HashSet<int>();
         foreach (var d in devices)
         {
             var start = d.RackUPosition!.Value;
             var size = Math.Max(1, d.RackUSize!.Value);
-            for (int u = start + 1; u < start + size; u++)
+            for (int u = start; u < start + size - 1; u++)
                 covered.Add(u);
+            if (size > 1)
+            {
+                coveredEnds.Add(start);
+            }
         }
 
         var maxU = devices.Max(d => d.RackUPosition!.Value + Math.Max(1, d.RackUSize!.Value) - 1);
@@ -413,7 +462,8 @@
                     U = u,
                     Device = null,
                     RowSpan = 1,
-                    IsCovered = covered.Contains(u)
+                    IsCovered = covered.Contains(u),
+                    IsCoveredEnd = coveredEnds.Contains(u)
                 });
             }
         }
@@ -464,6 +514,7 @@
         public Device? Device { get; set; }
         public int RowSpan { get; set; }
         public bool IsCovered { get; set; }
+        public bool IsCoveredEnd { get; set; }
         public bool IsOverlap { get; set; }
     }
 

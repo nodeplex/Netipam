@@ -40,6 +40,10 @@ public class Device
     // NEW: Host relationship
     public int? HostDeviceId { get; set; }
     public Device? HostDevice { get; set; }
+    public bool IsProxmoxHost { get; set; }
+    public int? ProxmoxInstanceId { get; set; }
+    public ProxmoxInstance? ProxmoxInstance { get; set; }
+    public string? ProxmoxNodeIdentifier { get; set; }
     public string? Manufacturer { get; set; }
     public string? Model { get; set; }
     public string? OperatingSystem { get; set; }

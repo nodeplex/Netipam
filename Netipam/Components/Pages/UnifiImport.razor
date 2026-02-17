@@ -56,17 +56,7 @@ else
                         Load Subnets Preview
                     </MudButton>
 
-                    <MudButton Variant="Variant.Text"
-                               Disabled="@((busy) || (subnetRows.Count == 0))"
-                               OnClick="@(() => SelectAllSubnets())">
-                        Select all
-                    </MudButton>
-                    <MudButton Variant="Variant.Text"
-                               Disabled="@((busy) || (subnetRows.Count == 0))"
-                               OnClick="@(() => SelectNoneSubnets())">
-                        Select none
-                    </MudButton>
-
+                    
                     <MudButton Variant="Variant.Filled" Color="Color.Primary"
                                Disabled="@((busy) || (subnetRows.Count == 0) || (subnetRows.Count(r => r.Selected) == 0))"
                                OnClick="CommitSubnets">
@@ -135,18 +125,7 @@ else
                         Load Devices Preview
                     </MudButton>
 
-                    <MudButton Variant="Variant.Text"
-                               Disabled="@((busy) || (infraRows.Count == 0))"
-                               OnClick="@SelectAllInfra">
-                        Select all
-                    </MudButton>
-
-                    <MudButton Variant="Variant.Text"
-                               Disabled="@((busy) || (infraRows.Count == 0))"
-                               OnClick="@SelectNoneInfra">
-                        Select none
-                    </MudButton>
-
+                    
                     <MudButton Variant="Variant.Filled" Color="Color.Primary"
                                Disabled="@((busy) || (infraRows.Count == 0) || (infraRows.Count(r => r.Selected) == 0))"
                                OnClick="CommitInfra">
@@ -226,17 +205,7 @@ else
                         Load Clients Preview
                     </MudButton>
 
-                    <MudButton Variant="Variant.Text"
-                               Disabled="@((busy) || (clientRows.Count == 0))"
-                               OnClick="@(() => SelectAllClients())">
-                        Select all
-                    </MudButton>
-                    <MudButton Variant="Variant.Text"
-                               Disabled="@((busy) || (clientRows.Count == 0))"
-                               OnClick="@(() => SelectNoneClients())">
-                        Select none
-                    </MudButton>
-
+                    
                     <MudButton Variant="Variant.Filled" Color="Color.Primary"
                                Disabled="@((busy) || (clientRows.Count == 0) || (clientRows.Count(r => r.Selected) == 0))"
                                OnClick="CommitClients">
@@ -761,6 +730,12 @@ public void Dispose()
 
                 entity.Hostname = r.Hostname?.Trim();
                 entity.IpAddress = r.IpAddress?.Trim();
+                entity.IsOnline = r.IsOnline;
+                if (r.IsOnline)
+                {
+                    entity.LastSeenAt = DateTime.UtcNow;
+                    entity.LastOnlineAt = DateTime.UtcNow;
+                }
 
                 entity.Manufacturer = r.Manufacturer?.Trim();
 
@@ -942,6 +917,7 @@ public void Dispose()
                     UnifiType = u.Type?.Trim(),
                     MappedTypeName = mappedTypeName,
                     MappedTypeId = mappedTypeId,
+                    IsOnline = u.IsOnline,
 
                     ConnectionDetail = uplink.Detail,
                     UpstreamDeviceName = uplink.ParentName,
@@ -1037,6 +1013,12 @@ public void Dispose()
 
                 entity.Name = !string.IsNullOrWhiteSpace(r.Name) ? r.Name!.Trim() : entity.MacAddress!;
                 entity.IpAddress = r.IpAddress?.Trim();
+                entity.IsOnline = r.IsOnline;
+                if (r.IsOnline)
+                {
+                    entity.LastSeenAt = DateTime.UtcNow;
+                    entity.LastOnlineAt = DateTime.UtcNow;
+                }
 
                 entity.Manufacturer ??= "Ubiquiti";
                 entity.Model = r.Model?.Trim();
@@ -1189,6 +1171,12 @@ public void Dispose()
                 if (!trackedByMac.TryGetValue(mac, out var entity))
                 {
                     entity = new Device { MacAddress = r.Mac, IsStatusTracked = true };
+                    entity.IsOnline = r.IsOnline;
+                    if (r.IsOnline)
+                    {
+                        entity.LastSeenAt = DateTime.UtcNow;
+                        entity.LastOnlineAt = DateTime.UtcNow;
+                    }
 
                     ApplyFields(entity, r, applyFields);
 
@@ -1236,6 +1224,13 @@ public void Dispose()
                 }
                 else
                 {
+                    entity.IsOnline = r.IsOnline;
+                    if (r.IsOnline)
+                    {
+                        entity.LastSeenAt = DateTime.UtcNow;
+                        entity.LastOnlineAt = DateTime.UtcNow;
+                    }
+
                     ApplyFields(entity, r, applyFields);
 
                     if (string.IsNullOrWhiteSpace(entity.Name))
@@ -1755,6 +1750,7 @@ private sealed class InfraPreviewRow
     public string? UpstreamDeviceName { get; set; }
     public string? UpstreamDeviceMac { get; set; }
     public string? UpstreamConnection { get; set; }
+    public bool IsOnline { get; set; }
 }
 
 private enum UpdateKind { New, Changed, Unchanged }

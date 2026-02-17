@@ -4,6 +4,7 @@
 @using MudBlazor
 @using Microsoft.EntityFrameworkCore
 @using Netipam.Data
+@using Netipam.Services
 @using Netipam.Unifi
 
 @inject AppDbContext DbContext
@@ -170,6 +171,9 @@
             device.MacAddress = string.IsNullOrWhiteSpace(device.MacAddress)
                 ? UnifiParsers.NormalizeMac(alert.Mac)
                 : UnifiParsers.NormalizeMac(device.MacAddress);
+
+            if (device.SubnetId is null)
+                device.SubnetId = await SubnetResolver.ResolveSubnetIdForIpAsync(DbContext, device.IpAddress);
 
             var exists = await DbContext.Devices
                 .AnyAsync(d => d.MacAddress == device.MacAddress);

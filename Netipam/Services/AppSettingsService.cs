@@ -34,6 +34,7 @@ public sealed class AppSettingsService
         if (s is not null)
         {
             s.UnifiAuthMode = NormalizeUnifiAuthMode(s.UnifiAuthMode);
+            s.ProxmoxIntervalSeconds = NormalizeProxmoxIntervalSeconds(s.ProxmoxIntervalSeconds);
             return s;
         }
 
@@ -44,7 +45,7 @@ public sealed class AppSettingsService
 
             // sensible defaults
             DarkMode = true,
-            ThemeName = "High Contrast",
+            ThemeName = "Graphite",
             DateFormat = "MM-dd-yyyy HH:mm",
             UiAutoRefreshSeconds = 0,
             ShowLastSeenTooltips = true,
@@ -52,7 +53,7 @@ public sealed class AppSettingsService
             UiShowWanStatus = true,
 
             UnifiUpdaterEnabled = false,
-            UnifiUpdaterIntervalSeconds = 60,
+            UnifiUpdaterIntervalSeconds = 120,
             UnifiUpdateConnectionFieldsWhenOnline = true,
             UnifiSyncIpAddress = true,
             UnifiSyncOnlineStatus = true,
@@ -61,10 +62,15 @@ public sealed class AppSettingsService
             UnifiSyncManufacturer = false,
             UnifiSyncModel = false,
             UnifiAuthMode = "Session",
+
+            ProxmoxEnabled = false,
+            ProxmoxIntervalSeconds = 300,
+            ProxmoxUpdateExistingHostAssignments = true,
         };
 
         db.AppSettings.Add(created);
         await db.SaveChangesAsync(ct);
+        await EnsureWanStatusDefaultAsync(db, ct);
 
         return created;
     }
@@ -130,6 +136,14 @@ public sealed class AppSettingsService
             current.UnifiAuthMode = NormalizeUnifiAuthMode(incoming.UnifiAuthMode);
             current.UnifiApiKeyProtected = incoming.UnifiApiKeyProtected;
 
+            current.ProxmoxEnabled = incoming.ProxmoxEnabled;
+            current.ProxmoxBaseUrl = incoming.ProxmoxBaseUrl;
+            current.ProxmoxApiTokenId = incoming.ProxmoxApiTokenId;
+            current.ProxmoxApiTokenSecretProtected = incoming.ProxmoxApiTokenSecretProtected;
+            current.ProxmoxHostDeviceMac = incoming.ProxmoxHostDeviceMac;
+            current.ProxmoxIntervalSeconds = NormalizeProxmoxIntervalSeconds(incoming.ProxmoxIntervalSeconds);
+            current.ProxmoxUpdateExistingHostAssignments = incoming.ProxmoxUpdateExistingHostAssignments;
+
             current.ShowLastSeenTooltips = incoming.ShowLastSeenTooltips;
             current.UiAutoRefreshSeconds = incoming.UiAutoRefreshSeconds;
             current.UiShowWanStatus = incoming.UiShowWanStatus;
@@ -165,20 +179,23 @@ public sealed class AppSettingsService
     private static string NormalizeUnifiAuthMode(string? mode)
         => string.Equals(mode?.Trim(), "ApiKey", StringComparison.OrdinalIgnoreCase) ? "ApiKey" : "Session";
 
+    private static int NormalizeProxmoxIntervalSeconds(int value)
+        => value <= 0 ? 300 : Math.Clamp(value, 30, 86400);
+
     private static async Task<AppSetting> EnsureSingletonRowAsync(AppDbContext db, CancellationToken ct)
     {
         var created = new AppSetting
         {
             Id = SingletonId,
             DarkMode = true,
-            ThemeName = "High Contrast",
+            ThemeName = "Graphite",
             DateFormat = "MM-dd-yyyy HH:mm",
             UiAutoRefreshSeconds = 0,
             ShowLastSeenTooltips = true,
             SiteTitle = "Netipam",
             UiShowWanStatus = true,
             UnifiUpdaterEnabled = false,
-            UnifiUpdaterIntervalSeconds = 60,
+            UnifiUpdaterIntervalSeconds = 120,
             UnifiUpdateConnectionFieldsWhenOnline = true,
             UnifiSyncIpAddress = true,
             UnifiSyncOnlineStatus = true,
@@ -187,10 +204,23 @@ public sealed class AppSettingsService
             UnifiSyncManufacturer = false,
             UnifiSyncModel = false,
             UnifiAuthMode = "Session",
+            ProxmoxEnabled = false,
+            ProxmoxIntervalSeconds = 300,
+            ProxmoxUpdateExistingHostAssignments = true,
         };
 
         db.AppSettings.Add(created);
         await db.SaveChangesAsync(ct);
+        await EnsureWanStatusDefaultAsync(db, ct);
         return created;
+    }
+
+    private static async Task EnsureWanStatusDefaultAsync(AppDbContext db, CancellationToken ct)
+    {
+        // Legacy migrations created this column with DB default false. Ensure first-run seed row keeps WAN status enabled.
+        await db.Database.ExecuteSqlRawAsync(
+            "UPDATE \"AppSettings\" SET \"UiShowWanStatus\" = 1 WHERE \"Id\" = {0} AND \"UiShowWanStatus\" = 0;",
+            new object[] { SingletonId },
+            ct);
     }
 }

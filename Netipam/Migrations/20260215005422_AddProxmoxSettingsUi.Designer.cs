@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Netipam.Data;
 
@@ -10,9 +11,11 @@ using Netipam.Data;
 namespace Netipam.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260215005422_AddProxmoxSettingsUi")]
+    partial class AddProxmoxSettingsUi
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.1");
@@ -234,7 +237,7 @@ namespace Netipam.Migrations
                         .ValueGeneratedOnAdd()
                         .HasMaxLength(64)
                         .HasColumnType("TEXT")
-                        .HasDefaultValue("Graphite");
+                        .HasDefaultValue("High Contrast");
 
                     b.Property<int>("UiAutoRefreshSeconds")
                         .ValueGeneratedOnAdd()
@@ -312,7 +315,7 @@ namespace Netipam.Migrations
                     b.Property<int>("UnifiUpdaterIntervalSeconds")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER")
-                        .HasDefaultValue(120);
+                        .HasDefaultValue(60);
 
                     b.Property<string>("UnifiUsername")
                         .HasMaxLength(128)
@@ -597,11 +600,6 @@ namespace Netipam.Migrations
                         .HasColumnType("INTEGER")
                         .HasDefaultValue(false);
 
-                    b.Property<bool>("IsProxmoxHost")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
-                        .HasDefaultValue(false);
-
                     b.Property<bool>("IsStatusTracked")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER")
@@ -671,13 +669,6 @@ namespace Netipam.Migrations
                     b.Property<int?>("ParentDeviceId")
                         .HasColumnType("INTEGER");
 
-                    b.Property<int?>("ProxmoxInstanceId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("ProxmoxNodeIdentifier")
-                        .HasMaxLength(128)
-                        .HasColumnType("TEXT");
-
                     b.Property<int?>("RackId")
                         .HasColumnType("INTEGER");
 
@@ -731,10 +722,6 @@ namespace Netipam.Migrations
                     b.HasIndex("ManualUpstreamDeviceId");
 
                     b.HasIndex("ParentDeviceId");
-
-                    b.HasIndex("ProxmoxInstanceId");
-
-                    b.HasIndex("ProxmoxNodeIdentifier");
 
                     b.HasIndex("RackId");
 
@@ -984,59 +971,6 @@ namespace Netipam.Migrations
                         .IsUnique();
 
                     b.ToTable("Locations");
-                });
-
-            modelBuilder.Entity("Netipam.Data.ProxmoxInstance", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("ApiTokenId")
-                        .IsRequired()
-                        .HasMaxLength(255)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ApiTokenSecretProtected")
-                        .HasMaxLength(2048)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("BaseUrl")
-                        .IsRequired()
-                        .HasMaxLength(255)
-                        .HasColumnType("TEXT");
-
-                    b.Property<bool>("Enabled")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
-                        .HasDefaultValue(true);
-
-                    b.Property<int>("IntervalSeconds")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
-                        .HasDefaultValue(300);
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("TEXT");
-
-                    b.Property<bool>("UpdateExistingHostAssignments")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
-                        .HasDefaultValue(true);
-
-                    b.Property<bool>("UpdateGuestClientType")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
-                        .HasDefaultValue(true);
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Name")
-                        .IsUnique();
-
-                    b.ToTable("ProxmoxInstances");
                 });
 
             modelBuilder.Entity("Netipam.Data.Rack", b =>
@@ -1421,11 +1355,6 @@ namespace Netipam.Migrations
                         .HasForeignKey("ParentDeviceId")
                         .OnDelete(DeleteBehavior.SetNull);
 
-                    b.HasOne("Netipam.Data.ProxmoxInstance", "ProxmoxInstance")
-                        .WithMany()
-                        .HasForeignKey("ProxmoxInstanceId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.HasOne("Netipam.Data.Rack", "RackRef")
                         .WithMany("Devices")
                         .HasForeignKey("RackId")
@@ -1447,8 +1376,6 @@ namespace Netipam.Migrations
                     b.Navigation("ManualUpstreamDevice");
 
                     b.Navigation("ParentDevice");
-
-                    b.Navigation("ProxmoxInstance");
 
                     b.Navigation("RackRef");
 

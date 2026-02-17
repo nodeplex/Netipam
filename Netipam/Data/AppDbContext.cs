@@ -30,6 +30,7 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
     public DbSet<ClientDiscoveryAlert> ClientDiscoveryAlerts => Set<ClientDiscoveryAlert>();
     public DbSet<DeviceFirmwareUpdateAlert> DeviceFirmwareUpdateAlerts => Set<DeviceFirmwareUpdateAlert>();
     public DbSet<IgnoredDiscoveryMac> IgnoredDiscoveryMacs => Set<IgnoredDiscoveryMac>();
+    public DbSet<ProxmoxInstance> ProxmoxInstances => Set<ProxmoxInstance>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -60,7 +61,7 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
             entity.Property(x => x.UnifiUpdaterEnabled).HasDefaultValue(true);
 
             // Safety: even if UI enforces it, DB default should be sane.
-            entity.Property(x => x.UnifiUpdaterIntervalSeconds).HasDefaultValue(60);
+            entity.Property(x => x.UnifiUpdaterIntervalSeconds).HasDefaultValue(120);
 
             entity.Property(x => x.UnifiUpdateConnectionFieldsWhenOnline).HasDefaultValue(true);
             entity.Property(x => x.UnifiSyncIpAddress).HasDefaultValue(true);
@@ -80,13 +81,22 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
             entity.Property(x => x.UnifiPasswordProtected).HasMaxLength(2048);
             entity.Property(x => x.UnifiApiKeyProtected).HasMaxLength(2048);
 
+            // ---- Proxmox host mapping ----
+            entity.Property(x => x.ProxmoxEnabled).HasDefaultValue(false);
+            entity.Property(x => x.ProxmoxBaseUrl).HasMaxLength(255);
+            entity.Property(x => x.ProxmoxApiTokenId).HasMaxLength(255);
+            entity.Property(x => x.ProxmoxApiTokenSecretProtected).HasMaxLength(2048);
+            entity.Property(x => x.ProxmoxHostDeviceMac).HasMaxLength(64);
+            entity.Property(x => x.ProxmoxIntervalSeconds).HasDefaultValue(300);
+            entity.Property(x => x.ProxmoxUpdateExistingHostAssignments).HasDefaultValue(true);
+
             // ---- UI / general ----
             entity.Property(x => x.ShowLastSeenTooltips).HasDefaultValue(true);
             entity.Property(x => x.UiAutoRefreshSeconds).HasDefaultValue(0);
             entity.Property(x => x.DarkMode).HasDefaultValue(true);
             entity.Property(x => x.ThemeName)
                   .HasMaxLength(64)
-                  .HasDefaultValue("Default");
+                  .HasDefaultValue("Graphite");
 
             entity.Property(x => x.SiteTitle)
                   .HasMaxLength(64)
@@ -96,7 +106,20 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
                   .HasMaxLength(64)
                   .HasDefaultValue("MM-dd-yyyy HH:mm");
 
-            entity.Property(x => x.UiShowWanStatus).HasDefaultValue(false);
+            entity.Property(x => x.UiShowWanStatus).HasDefaultValue(true);
+        });
+
+        modelBuilder.Entity<ProxmoxInstance>(entity =>
+        {
+            entity.Property(x => x.Name).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.BaseUrl).HasMaxLength(255).IsRequired();
+            entity.Property(x => x.ApiTokenId).HasMaxLength(255).IsRequired();
+            entity.Property(x => x.ApiTokenSecretProtected).HasMaxLength(2048);
+            entity.Property(x => x.Enabled).HasDefaultValue(true);
+            entity.Property(x => x.IntervalSeconds).HasDefaultValue(300);
+            entity.Property(x => x.UpdateExistingHostAssignments).HasDefaultValue(true);
+            entity.Property(x => x.UpdateGuestClientType).HasDefaultValue(true);
+            entity.HasIndex(x => x.Name).IsUnique();
         });
 
         // ---- Subnets ----
@@ -238,6 +261,8 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
             entity.Property(d => d.MonitorUseHttps).HasDefaultValue(false);
             entity.Property(d => d.MonitorHttpPath).HasMaxLength(512);
             entity.Property(d => d.IgnoreOffline).HasDefaultValue(false);
+            entity.Property(d => d.IsProxmoxHost).HasDefaultValue(false);
+            entity.Property(d => d.ProxmoxNodeIdentifier).HasMaxLength(128);
             entity.Property(d => d.ConnectionType).HasMaxLength(32);
             entity.Property(d => d.ConnectionDetail).HasMaxLength(255);
             entity.Property(d => d.LocationId);
@@ -290,6 +315,13 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
                   .OnDelete(DeleteBehavior.SetNull);
 
             entity.HasIndex(d => d.HostDeviceId);
+
+            entity.HasOne(d => d.ProxmoxInstance)
+                  .WithMany()
+                  .HasForeignKey(d => d.ProxmoxInstanceId)
+                  .OnDelete(DeleteBehavior.SetNull);
+            entity.HasIndex(d => d.ProxmoxInstanceId);
+            entity.HasIndex(d => d.ProxmoxNodeIdentifier);
 
             entity.HasOne(d => d.ParentDevice)
                   .WithMany()

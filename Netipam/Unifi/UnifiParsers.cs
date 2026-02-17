@@ -44,7 +44,8 @@ public static class UnifiParsers
         string? UplinkMac,
         int? UplinkPort,
         bool? IsUpgradable,
-        string? UpgradeToVersion);
+        string? UpgradeToVersion,
+        bool IsOnline);
 
     public sealed record UnifiWanInterface(
         string? GatewayName,
@@ -113,6 +114,9 @@ public static class UnifiParsers
                 GetString(d, "upgrade_to_firmware") ??
                 GetString(d, "upgrade_to_version") ??
                 GetString(d, "required_version");
+            var isOnline =
+                (GetBool(d, "is_connected") ?? GetBool(d, "connected")) ??
+                ((GetInt(d, "state") ?? 0) == 1);
 
             // Uplink info
             string? uplinkMac = null;
@@ -134,7 +138,8 @@ public static class UnifiParsers
                 uplinkMac,
                 uplinkPort,
                 isUpgradable,
-                upgradeTo));
+                upgradeTo,
+                isOnline));
         }
 
         return list

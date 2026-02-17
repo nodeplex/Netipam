@@ -32,7 +32,7 @@
             <MudTh style="width:160px;">IP</MudTh>
             <MudTh style="width:220px;">Went offline</MudTh>
             <MudTh style="width:220px;">Recovered</MudTh>
-            <MudTh style="width:140px;"></MudTh>
+            <MudTh style="width:260px;"></MudTh>
         </HeaderContent>
 
         <RowTemplate Context="a">
@@ -75,13 +75,22 @@
             </MudTd>
 
             <MudTd>
-                <MudButton Variant="Variant.Filled"
-                           Color="Color.Primary"
-                           Size="Size.Small"
-                           Disabled="@ackBusy"
-                           OnClick="@(() => Acknowledge(a.Id))">
-                    Acknowledge
-                </MudButton>
+                <MudStack Row="true" Spacing="1">
+                    <MudButton Variant="Variant.Filled"
+                               Color="Color.Primary"
+                               Size="Size.Small"
+                               Disabled="@ackBusy"
+                               OnClick="@(() => Acknowledge(a.Id))">
+                        Acknowledge
+                    </MudButton>
+                    <MudButton Variant="Variant.Outlined"
+                               Color="Color.Warning"
+                               Size="Size.Small"
+                               Disabled="@ackBusy"
+                               OnClick="@(() => IgnoreOfflineAndAcknowledge(a.Id))">
+                        Ignore Offline
+                    </MudButton>
+                </MudStack>
             </MudTd>
         </RowTemplate>
 
@@ -120,6 +129,33 @@
         {
             var entity = await DbContext.ClientOfflineAlerts.FirstOrDefaultAsync(a => a.Id == id);
             if (entity is null) return;
+
+            entity.IsAcknowledged = true;
+            entity.AcknowledgedAtUtc = DateTime.UtcNow;
+
+            await DbContext.SaveChangesAsync();
+            await Reload();
+        }
+        finally
+        {
+            ackBusy = false;
+        }
+    }
+
+    private async Task IgnoreOfflineAndAcknowledge(int id)
+    {
+        if (ackBusy) return;
+        ackBusy = true;
+
+        try
+        {
+            var entity = await DbContext.ClientOfflineAlerts
+                .Include(a => a.Device)
+                .FirstOrDefaultAsync(a => a.Id == id);
+            if (entity is null) return;
+
+            if (entity.Device is not null)
+                entity.Device.IgnoreOffline = true;
 
             entity.IsAcknowledged = true;
             entity.AcknowledgedAtUtc = DateTime.UtcNow;

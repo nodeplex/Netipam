@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Netipam.Data;
 
@@ -10,9 +11,11 @@ using Netipam.Data;
 namespace Netipam.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260215141018_AddProxmoxInstancesAndDeviceMapping")]
+    partial class AddProxmoxInstancesAndDeviceMapping
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.1");
@@ -234,7 +237,7 @@ namespace Netipam.Migrations
                         .ValueGeneratedOnAdd()
                         .HasMaxLength(64)
                         .HasColumnType("TEXT")
-                        .HasDefaultValue("Graphite");
+                        .HasDefaultValue("High Contrast");
 
                     b.Property<int>("UiAutoRefreshSeconds")
                         .ValueGeneratedOnAdd()
@@ -312,7 +315,7 @@ namespace Netipam.Migrations
                     b.Property<int>("UnifiUpdaterIntervalSeconds")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER")
-                        .HasDefaultValue(120);
+                        .HasDefaultValue(60);
 
                     b.Property<string>("UnifiUsername")
                         .HasMaxLength(128)
@@ -1022,11 +1025,6 @@ namespace Netipam.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<bool>("UpdateExistingHostAssignments")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER")
-                        .HasDefaultValue(true);
-
-                    b.Property<bool>("UpdateGuestClientType")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER")
                         .HasDefaultValue(true);

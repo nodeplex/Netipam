@@ -78,6 +78,12 @@
                              style="@BlockStyle(block)">
                         <div class="rack-block-header">
                             <div class="rack-block-title">
+                                <MudTooltip Text="@GetStatusTooltip(block)">
+                                    <MudIcon Icon="@Icons.Material.Filled.Circle"
+                                             Color="@GetStatusColor(block)"
+                                             Size="Size.Small"
+                                             Style="font-size:12px;" />
+                                </MudTooltip>
                                 @if (block.HasLink && !string.IsNullOrWhiteSpace(block.Link))
                                 {
                                     <MudLink Href="@block.Link"
@@ -186,10 +192,11 @@
         left: 6px;
         right: 6px;
         background: var(--mud-palette-background-grey);
-        border: 1px solid var(--mud-palette-divider);
+        border: 2px solid color-mix(in srgb, var(--mud-palette-text-primary) 35%, var(--mud-palette-divider) 65%);
         border-radius: 6px;
         padding: 6px 8px;
         overflow: hidden;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28), inset 0 0 0 1px rgba(255, 255, 255, 0.08);
     }
 
     .rack-block.overlap {
@@ -328,7 +335,9 @@
                 HasLink = TryBuildAccessLink(d.AccessLink, out _),
                 StartU = start,
                 SizeU = size,
-                IsOverlap = isOverlap
+                IsOverlap = isOverlap,
+                IsOnline = d.IsOnline,
+                IsStatusTracked = d.IsStatusTracked
             };
         }).ToList();
 
@@ -360,6 +369,8 @@
         public int StartU { get; set; }
         public int SizeU { get; set; }
         public bool IsOverlap { get; set; }
+        public bool IsOnline { get; set; }
+        public bool IsStatusTracked { get; set; }
     }
 
     private static string BuildMetaText(RackBlock block)
@@ -373,5 +384,14 @@
             parts.Add(block.Model);
         return string.Join(" - ", parts);
     }
+
+    private static string StatusText(RackBlock block)
+        => block.IsStatusTracked ? (block.IsOnline ? "Online" : "Offline") : "Not Tracked";
+
+    private static string GetStatusTooltip(RackBlock block)
+        => $"Status: {StatusText(block)}";
+
+    private static Color GetStatusColor(RackBlock block)
+        => block.IsStatusTracked ? (block.IsOnline ? Color.Success : Color.Error) : Color.Default;
 
 }

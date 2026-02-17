@@ -268,7 +268,7 @@
                         <MudTh>Rack</MudTh>
                         <MudTh style="width:220px;">Went offline</MudTh>
                         <MudTh style="width:220px;">Recovered</MudTh>
-                        <MudTh style="width:120px;"></MudTh>
+                        <MudTh style="width:260px;"></MudTh>
                     </HeaderContent>
 
                     <RowTemplate Context="a">
@@ -341,13 +341,22 @@
                         </MudTd>
 
                         <MudTd DataLabel="Actions">
-                            <MudButton Variant="Variant.Filled"
-                                       Color="Color.Primary"
-                                       Size="Size.Small"
-                                       Disabled="@ackBusy"
-                                       OnClick="@(() => Acknowledge(a.Id))">
-                                Acknowledge
-                            </MudButton>
+                            <MudStack Row="true" Spacing="1">
+                                <MudButton Variant="Variant.Filled"
+                                           Color="Color.Primary"
+                                           Size="Size.Small"
+                                           Disabled="@ackBusy"
+                                           OnClick="@(() => Acknowledge(a.Id))">
+                                    Acknowledge
+                                </MudButton>
+                                <MudButton Variant="Variant.Outlined"
+                                           Color="Color.Warning"
+                                           Size="Size.Small"
+                                           Disabled="@ackBusy"
+                                           OnClick="@(() => IgnoreOfflineAndAcknowledge(a.Id))">
+                                    Ignore Offline
+                                </MudButton>
+                            </MudStack>
                         </MudTd>
                     </RowTemplate>
 
@@ -917,6 +926,35 @@
         }
     }
 
+    private async Task IgnoreOfflineAndAcknowledge(int alertId)
+    {
+        if (ackBusy) return;
+        ackBusy = true;
+
+        try
+        {
+            var entity = await DbContext.ClientOfflineAlerts
+                .Include(a => a.Device)
+                .FirstOrDefaultAsync(a => a.Id == alertId);
+
+            if (entity is null)
+                return;
+
+            if (entity.Device is not null)
+                entity.Device.IgnoreOffline = true;
+
+            entity.IsAcknowledged = true;
+            entity.AcknowledgedAtUtc = DateTime.UtcNow;
+
+            await DbContext.SaveChangesAsync();
+            await Reload();
+        }
+        finally
+        {
+            ackBusy = false;
+        }
+    }
+
     private async Task AcknowledgeFirmware(int alertId)
     {
         if (ackFirmwareBusy) return;
@@ -1001,6 +1039,9 @@
             device.MacAddress = string.IsNullOrWhiteSpace(device.MacAddress)
                 ? UnifiParsers.NormalizeMac(alert.Mac)
                 : UnifiParsers.NormalizeMac(device.MacAddress);
+
+            if (device.SubnetId is null)
+                device.SubnetId = await SubnetResolver.ResolveSubnetIdForIpAsync(DbContext, device.IpAddress);
 
             var exists = await DbContext.Devices
                 .AnyAsync(d => d.MacAddress == device.MacAddress);

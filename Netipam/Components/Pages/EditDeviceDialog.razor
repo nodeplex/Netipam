@@ -52,6 +52,36 @@
                         }
                     </MudSelect>
 
+                    <MudSwitch T="bool"
+                               Value="@device.IsProxmoxHost"
+                               ValueChanged="OnProxmoxHostChanged"
+                               Color="Color.Primary"
+                               Disabled="@busy"
+                               Label="Proxmox Host" />
+
+                    @if (device.IsProxmoxHost)
+                    {
+                        <MudSelect T="int?"
+                                   Label="Proxmox Instance"
+                                   @bind-Value="device.ProxmoxInstanceId"
+                                   Required="true"
+                                   RequiredError="Proxmox instance is required."
+                                   Disabled="@busy">
+                            @foreach (var p in proxmoxInstances)
+                            {
+                                <MudSelectItem T="int?" Value="@p.Id">@p.Name</MudSelectItem>
+                            }
+                        </MudSelect>
+
+                        <MudTextField T="string"
+                                      Label="Proxmox Node Identifier"
+                                      Placeholder="pve-node-1"
+                                      HelperText="Exact node name in Proxmox for this host."
+                                      @bind-Value="device.ProxmoxNodeIdentifier"
+                                      Immediate="true"
+                                      Disabled="@busy" />
+                    }
+
                     <MudGrid Spacing="2">
                         <MudItem xs="12" sm="6">
                             <MudSwitch T="bool"
@@ -269,6 +299,7 @@
     private List<Location> locations = new();
     private List<Rack> racks = new();
     private List<Device> upstreamDevices = new();
+    private List<ProxmoxInstance> proxmoxInstances = new();
 
     private bool loading = true;
     private bool busy;
@@ -313,9 +344,14 @@
         hostDevices = await DbContext.Devices
             .AsNoTracking()
             .Include(d => d.ClientType)
-            .Where(d => d.ClientType != null && d.ClientType.IsHost)
+            .Where(d => (d.ClientType != null && d.ClientType.IsHost) || d.IsProxmoxHost)
             .Where(d => d.Id != DeviceId)
             .OrderBy(d => d.Name)
+            .ToListAsync();
+
+        proxmoxInstances = await DbContext.ProxmoxInstances
+            .AsNoTracking()
+            .OrderBy(p => p.Name)
             .ToListAsync();
 
         upstreamDevices = await DbContext.Devices
@@ -338,6 +374,32 @@
     }
 
     private void Cancel() => MudDialog.Cancel();
+
+    private Task OnProxmoxHostChanged(bool value)
+    {
+        if (device is null)
+            return Task.CompletedTask;
+
+        device.IsProxmoxHost = value;
+
+        if (value)
+            ApplyProxmoxServerClientType();
+
+        return Task.CompletedTask;
+    }
+
+    private void ApplyProxmoxServerClientType()
+    {
+        if (device is null)
+            return;
+
+        var proxmoxServerTypeId = clientTypes
+            .FirstOrDefault(t => string.Equals(t.Name?.Trim(), "Proxmox Server", StringComparison.OrdinalIgnoreCase))
+            ?.Id;
+
+        if (proxmoxServerTypeId is not null)
+            device.ClientTypeId = proxmoxServerTypeId.Value;
+    }
 
     private async Task Save()
     {
@@ -402,6 +464,19 @@
 
             if (device.ManualUpstreamDeviceId == device.Id)
                 device.ManualUpstreamDeviceId = null;
+
+            if (!device.IsProxmoxHost)
+            {
+                device.ProxmoxInstanceId = null;
+                device.ProxmoxNodeIdentifier = null;
+            }
+            else
+            {
+                if (device.ProxmoxInstanceId is null || string.IsNullOrWhiteSpace(device.ProxmoxNodeIdentifier))
+                    return;
+
+                device.ProxmoxNodeIdentifier = device.ProxmoxNodeIdentifier.Trim();
+            }
 
             if (device.MonitorMode == DeviceMonitorMode.Normal)
             {

@@ -40,15 +40,21 @@ public sealed class BackupService
                 Racks = await db.Racks.AsNoTracking().OrderBy(r => r.Id).Select(r => new RackDto(r)).ToListAsync(ct),
                 Subnets = await db.Subnets.AsNoTracking().OrderBy(s => s.Id).Select(s => new SubnetDto(s)).ToListAsync(ct),
                 IpAssignments = await db.IpAssignments.AsNoTracking().OrderBy(i => i.Id).Select(i => new IpAssignmentDto(i)).ToListAsync(ct),
+                ProxmoxInstances = await db.ProxmoxInstances.AsNoTracking().OrderBy(p => p.Id).Select(p => new ProxmoxInstanceDto(p)).ToListAsync(ct),
                 Devices = await db.Devices.AsNoTracking().OrderBy(d => d.Id).Select(d => new DeviceDto(d)).ToListAsync(ct),
                 DeviceStatusEvents = await db.DeviceStatusEvents.AsNoTracking().OrderBy(e => e.Id).Select(e => new DeviceStatusEventDto(e)).ToListAsync(ct),
                 DeviceStatusDaily = await db.DeviceStatusDaily.AsNoTracking().OrderBy(d => d.Id).Select(d => new DeviceStatusDailyDto(d)).ToListAsync(ct),
                 DeviceIpHistories = await db.DeviceIpHistories.AsNoTracking().OrderBy(h => h.Id).Select(h => new DeviceIpHistoryDto(h)).ToListAsync(ct),
                 ClientOfflineAlerts = await db.ClientOfflineAlerts.AsNoTracking().OrderBy(a => a.Id).Select(a => new ClientOfflineAlertDto(a)).ToListAsync(ct),
                 ClientDiscoveryAlerts = await db.ClientDiscoveryAlerts.AsNoTracking().OrderBy(a => a.Id).Select(a => new ClientDiscoveryAlertDto(a)).ToListAsync(ct),
+                DeviceFirmwareUpdateAlerts = await db.DeviceFirmwareUpdateAlerts.AsNoTracking().OrderBy(a => a.Id).Select(a => new DeviceFirmwareUpdateAlertDto(a)).ToListAsync(ct),
                 IgnoredDiscoveryMacs = await db.IgnoredDiscoveryMacs.AsNoTracking().OrderBy(i => i.Id).Select(i => new IgnoredDiscoveryMacDto(i)).ToListAsync(ct),
                 UpdaterRunLogs = await db.UpdaterRunLogs.AsNoTracking().OrderBy(r => r.Id).Select(r => new UpdaterRunLogDto(r)).ToListAsync(ct),
                 UpdaterChangeLogs = await db.UpdaterChangeLogs.AsNoTracking().OrderBy(c => c.Id).Select(c => new UpdaterChangeLogDto(c)).ToListAsync(ct),
+                WanInterfaceStatuses = await db.WanInterfaceStatuses.AsNoTracking().OrderBy(w => w.Id).Select(w => new WanInterfaceStatusDto(w)).ToListAsync(ct),
+                UserColumnPreferences = await db.UserColumnPreferences.AsNoTracking().OrderBy(p => p.Id).Select(p => new UserColumnPreferenceDto(p)).ToListAsync(ct),
+                UserAccessCategoryOrders = await db.UserAccessCategoryOrders.AsNoTracking().OrderBy(p => p.Id).Select(p => new UserAccessCategoryOrderDto(p)).ToListAsync(ct),
+                UserAccessItemOrders = await db.UserAccessItemOrders.AsNoTracking().OrderBy(p => p.Id).Select(p => new UserAccessItemOrderDto(p)).ToListAsync(ct),
                 Users = await db.Users.AsNoTracking().OrderBy(u => u.Id).Select(u => new AppUserDto(u)).ToListAsync(ct),
                 Roles = await db.Roles.AsNoTracking().OrderBy(r => r.Id).Select(r => new RoleDto(r)).ToListAsync(ct),
                 UserRoles = await db.UserRoles.AsNoTracking().OrderBy(ur => ur.UserId).ThenBy(ur => ur.RoleId).Select(ur => new UserRoleDto(ur)).ToListAsync(ct),
@@ -78,19 +84,25 @@ public sealed class BackupService
 
         total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"UpdaterChangeLogs\";", ct);
         total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"UpdaterRunLogs\";", ct);
+        total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"WanInterfaceStatuses\";", ct);
         total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"DeviceStatusEvents\";", ct);
         total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"DeviceStatusDaily\";", ct);
         total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"DeviceIpHistories\";", ct);
         total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"ClientOfflineAlerts\";", ct);
         total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"ClientDiscoveryAlerts\";", ct);
+        total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"DeviceFirmwareUpdateAlerts\";", ct);
         total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"IgnoredDiscoveryMacs\";", ct);
+        total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"UserAccessItemOrders\";", ct);
         total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"IpAssignments\";", ct);
         total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"Devices\";", ct);
+        total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"ProxmoxInstances\";", ct);
         total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"Subnets\";", ct);
         total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"Racks\";", ct);
         total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"Locations\";", ct);
+        total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"UserAccessCategoryOrders\";", ct);
         total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"AccessCategories\";", ct);
         total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"ClientTypes\";", ct);
+        total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"UserColumnPreferences\";", ct);
         total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"AppSettings\";", ct);
         total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"AspNetUserTokens\";", ct);
         total += await db.Database.ExecuteSqlRawAsync("DELETE FROM \"AspNetUserLogins\";", ct);
@@ -109,15 +121,21 @@ public sealed class BackupService
         db.Racks.AddRange(payload.Data.Racks.Select(r => r.ToEntity()));
         db.Subnets.AddRange(payload.Data.Subnets.Select(s => s.ToEntity()));
         db.IpAssignments.AddRange(payload.Data.IpAssignments.Select(i => i.ToEntity()));
+        db.ProxmoxInstances.AddRange(payload.Data.ProxmoxInstances.Select(p => p.ToEntity()));
         db.Devices.AddRange(payload.Data.Devices.Select(d => d.ToEntity()));
         db.DeviceStatusEvents.AddRange(payload.Data.DeviceStatusEvents.Select(e => e.ToEntity()));
         db.DeviceStatusDaily.AddRange(payload.Data.DeviceStatusDaily.Select(d => d.ToEntity()));
         db.DeviceIpHistories.AddRange(payload.Data.DeviceIpHistories.Select(h => h.ToEntity()));
         db.ClientOfflineAlerts.AddRange(payload.Data.ClientOfflineAlerts.Select(a => a.ToEntity()));
         db.ClientDiscoveryAlerts.AddRange(payload.Data.ClientDiscoveryAlerts.Select(a => a.ToEntity()));
+        db.DeviceFirmwareUpdateAlerts.AddRange(payload.Data.DeviceFirmwareUpdateAlerts.Select(a => a.ToEntity()));
         db.IgnoredDiscoveryMacs.AddRange(payload.Data.IgnoredDiscoveryMacs.Select(i => i.ToEntity()));
         db.UpdaterRunLogs.AddRange(payload.Data.UpdaterRunLogs.Select(r => r.ToEntity()));
         db.UpdaterChangeLogs.AddRange(payload.Data.UpdaterChangeLogs.Select(c => c.ToEntity()));
+        db.WanInterfaceStatuses.AddRange(payload.Data.WanInterfaceStatuses.Select(w => w.ToEntity()));
+        db.UserColumnPreferences.AddRange(payload.Data.UserColumnPreferences.Select(p => p.ToEntity()));
+        db.UserAccessCategoryOrders.AddRange(payload.Data.UserAccessCategoryOrders.Select(p => p.ToEntity()));
+        db.UserAccessItemOrders.AddRange(payload.Data.UserAccessItemOrders.Select(p => p.ToEntity()));
         db.Roles.AddRange(payload.Data.Roles.Select(r => r.ToEntity()));
         db.Users.AddRange(payload.Data.Users.Select(u => u.ToEntity()));
         db.RoleClaims.AddRange(payload.Data.RoleClaims.Select(rc => rc.ToEntity()));
@@ -149,15 +167,21 @@ public sealed class BackupService
         public List<RackDto> Racks { get; set; } = new();
         public List<SubnetDto> Subnets { get; set; } = new();
         public List<IpAssignmentDto> IpAssignments { get; set; } = new();
+        public List<ProxmoxInstanceDto> ProxmoxInstances { get; set; } = new();
         public List<DeviceDto> Devices { get; set; } = new();
         public List<DeviceStatusEventDto> DeviceStatusEvents { get; set; } = new();
         public List<DeviceStatusDailyDto> DeviceStatusDaily { get; set; } = new();
         public List<DeviceIpHistoryDto> DeviceIpHistories { get; set; } = new();
         public List<ClientOfflineAlertDto> ClientOfflineAlerts { get; set; } = new();
         public List<ClientDiscoveryAlertDto> ClientDiscoveryAlerts { get; set; } = new();
+        public List<DeviceFirmwareUpdateAlertDto> DeviceFirmwareUpdateAlerts { get; set; } = new();
         public List<IgnoredDiscoveryMacDto> IgnoredDiscoveryMacs { get; set; } = new();
         public List<UpdaterRunLogDto> UpdaterRunLogs { get; set; } = new();
         public List<UpdaterChangeLogDto> UpdaterChangeLogs { get; set; } = new();
+        public List<WanInterfaceStatusDto> WanInterfaceStatuses { get; set; } = new();
+        public List<UserColumnPreferenceDto> UserColumnPreferences { get; set; } = new();
+        public List<UserAccessCategoryOrderDto> UserAccessCategoryOrders { get; set; } = new();
+        public List<UserAccessItemOrderDto> UserAccessItemOrders { get; set; } = new();
         public List<AppUserDto> Users { get; set; } = new();
         public List<RoleDto> Roles { get; set; } = new();
         public List<UserRoleDto> UserRoles { get; set; } = new();
@@ -278,6 +302,44 @@ public sealed class BackupService
     }
 
     [method: JsonConstructor]
+    public sealed record ProxmoxInstanceDto(
+        int Id,
+        string Name,
+        bool Enabled,
+        string BaseUrl,
+        string ApiTokenId,
+        string? ApiTokenSecretProtected,
+        int IntervalSeconds,
+        bool UpdateExistingHostAssignments,
+        bool UpdateGuestClientType)
+    {
+        public ProxmoxInstanceDto(ProxmoxInstance e) : this(
+            e.Id,
+            e.Name,
+            e.Enabled,
+            e.BaseUrl,
+            e.ApiTokenId,
+            e.ApiTokenSecretProtected,
+            e.IntervalSeconds,
+            e.UpdateExistingHostAssignments,
+            e.UpdateGuestClientType)
+        { }
+
+        public ProxmoxInstance ToEntity() => new()
+        {
+            Id = Id,
+            Name = Name,
+            Enabled = Enabled,
+            BaseUrl = BaseUrl,
+            ApiTokenId = ApiTokenId,
+            ApiTokenSecretProtected = ApiTokenSecretProtected,
+            IntervalSeconds = IntervalSeconds,
+            UpdateExistingHostAssignments = UpdateExistingHostAssignments,
+            UpdateGuestClientType = UpdateGuestClientType
+        };
+    }
+
+    [method: JsonConstructor]
     public sealed record DeviceDto(
         int Id,
         string Name,
@@ -301,6 +363,9 @@ public sealed class BackupService
         string? ConnectionDetail,
         int? ClientTypeId,
         int? HostDeviceId,
+        bool IsProxmoxHost,
+        int? ProxmoxInstanceId,
+        string? ProxmoxNodeIdentifier,
         string? Manufacturer,
         string? Model,
         string? OperatingSystem,
@@ -346,6 +411,9 @@ public sealed class BackupService
             e.ConnectionDetail,
             e.ClientTypeId,
             e.HostDeviceId,
+            e.IsProxmoxHost,
+            e.ProxmoxInstanceId,
+            e.ProxmoxNodeIdentifier,
             e.Manufacturer,
             e.Model,
             e.OperatingSystem,
@@ -393,6 +461,9 @@ public sealed class BackupService
             ConnectionDetail = ConnectionDetail,
             ClientTypeId = ClientTypeId,
             HostDeviceId = HostDeviceId,
+            IsProxmoxHost = IsProxmoxHost,
+            ProxmoxInstanceId = ProxmoxInstanceId,
+            ProxmoxNodeIdentifier = ProxmoxNodeIdentifier,
             Manufacturer = Manufacturer,
             Model = Model,
             OperatingSystem = OperatingSystem,
@@ -582,6 +653,53 @@ public sealed class BackupService
     }
 
     [method: JsonConstructor]
+    public sealed record DeviceFirmwareUpdateAlertDto(
+        int Id,
+        int DeviceId,
+        string? NameAtTime,
+        string? MacAtTime,
+        string? ModelAtTime,
+        string? CurrentVersion,
+        string? TargetVersion,
+        DateTime DetectedAtUtc,
+        bool IsAcknowledged,
+        DateTime? AcknowledgedAtUtc,
+        DateTime? ResolvedAtUtc,
+        string? Source)
+    {
+        public DeviceFirmwareUpdateAlertDto(DeviceFirmwareUpdateAlert e) : this(
+            e.Id,
+            e.DeviceId,
+            e.NameAtTime,
+            e.MacAtTime,
+            e.ModelAtTime,
+            e.CurrentVersion,
+            e.TargetVersion,
+            e.DetectedAtUtc,
+            e.IsAcknowledged,
+            e.AcknowledgedAtUtc,
+            e.ResolvedAtUtc,
+            e.Source)
+        { }
+
+        public DeviceFirmwareUpdateAlert ToEntity() => new()
+        {
+            Id = Id,
+            DeviceId = DeviceId,
+            NameAtTime = NameAtTime,
+            MacAtTime = MacAtTime,
+            ModelAtTime = ModelAtTime,
+            CurrentVersion = CurrentVersion,
+            TargetVersion = TargetVersion,
+            DetectedAtUtc = DetectedAtUtc,
+            IsAcknowledged = IsAcknowledged,
+            AcknowledgedAtUtc = AcknowledgedAtUtc,
+            ResolvedAtUtc = ResolvedAtUtc,
+            Source = Source
+        };
+    }
+
+    [method: JsonConstructor]
     public sealed record IgnoredDiscoveryMacDto(
         int Id,
         string Mac,
@@ -651,6 +769,113 @@ public sealed class BackupService
             FieldName = FieldName,
             OldValue = OldValue,
             NewValue = NewValue
+        };
+    }
+
+    [method: JsonConstructor]
+    public sealed record WanInterfaceStatusDto(
+        int Id,
+        string? GatewayName,
+        string? GatewayMac,
+        string InterfaceName,
+        bool? IsUp,
+        string? IpAddress,
+        DateTime UpdatedAtUtc)
+    {
+        public WanInterfaceStatusDto(WanInterfaceStatus e) : this(
+            e.Id,
+            e.GatewayName,
+            e.GatewayMac,
+            e.InterfaceName,
+            e.IsUp,
+            e.IpAddress,
+            e.UpdatedAtUtc)
+        { }
+
+        public WanInterfaceStatus ToEntity() => new()
+        {
+            Id = Id,
+            GatewayName = GatewayName,
+            GatewayMac = GatewayMac,
+            InterfaceName = InterfaceName,
+            IsUp = IsUp,
+            IpAddress = IpAddress,
+            UpdatedAtUtc = UpdatedAtUtc
+        };
+    }
+
+    [method: JsonConstructor]
+    public sealed record UserColumnPreferenceDto(
+        int Id,
+        string UserId,
+        string PageKey,
+        string ColumnKey,
+        bool IsVisible,
+        DateTime UpdatedAtUtc)
+    {
+        public UserColumnPreferenceDto(UserColumnPreference e) : this(
+            e.Id,
+            e.UserId,
+            e.PageKey,
+            e.ColumnKey,
+            e.IsVisible,
+            e.UpdatedAtUtc)
+        { }
+
+        public UserColumnPreference ToEntity() => new()
+        {
+            Id = Id,
+            UserId = UserId,
+            PageKey = PageKey,
+            ColumnKey = ColumnKey,
+            IsVisible = IsVisible,
+            UpdatedAtUtc = UpdatedAtUtc
+        };
+    }
+
+    [method: JsonConstructor]
+    public sealed record UserAccessCategoryOrderDto(
+        int Id,
+        string UserId,
+        int AccessCategoryId,
+        int SortOrder)
+    {
+        public UserAccessCategoryOrderDto(UserAccessCategoryOrder e) : this(
+            e.Id,
+            e.UserId,
+            e.AccessCategoryId,
+            e.SortOrder)
+        { }
+
+        public UserAccessCategoryOrder ToEntity() => new()
+        {
+            Id = Id,
+            UserId = UserId,
+            AccessCategoryId = AccessCategoryId,
+            SortOrder = SortOrder
+        };
+    }
+
+    [method: JsonConstructor]
+    public sealed record UserAccessItemOrderDto(
+        int Id,
+        string UserId,
+        int DeviceId,
+        int SortOrder)
+    {
+        public UserAccessItemOrderDto(UserAccessItemOrder e) : this(
+            e.Id,
+            e.UserId,
+            e.DeviceId,
+            e.SortOrder)
+        { }
+
+        public UserAccessItemOrder ToEntity() => new()
+        {
+            Id = Id,
+            UserId = UserId,
+            DeviceId = DeviceId,
+            SortOrder = SortOrder
         };
     }
 

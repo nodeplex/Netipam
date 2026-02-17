@@ -12,6 +12,8 @@ public sealed class UnifiOnlineStatusUpdater : BackgroundService
     private readonly ILogger<UnifiOnlineStatusUpdater> _logger;
     private readonly AppSettingsService _settingsService;
     private readonly UnifiUpdaterControl _control;
+    private readonly object _enableTriggerLock = new();
+    private CancellationTokenSource? _enableTriggerCts;
 
     private volatile bool _enabled = true;
     private volatile int _intervalSeconds = 60;
@@ -25,6 +27,7 @@ public sealed class UnifiOnlineStatusUpdater : BackgroundService
 
     private const int StatusEventRetentionDays = 30;
     private const int StatusRollupRetentionDays = 180;
+    private const int EnableTransitionDelaySeconds = 30;
 
     // Ping tuning (simple defaults; later you can put these in AppSetting)
     private const int PingTimeoutMs = 1000;
@@ -105,6 +108,8 @@ public sealed class UnifiOnlineStatusUpdater : BackgroundService
 
     private void ApplySettings(AppSetting s)
     {
+        var wasEnabled = _enabled;
+
         _enabled = s.UnifiUpdaterEnabled;
         _intervalSeconds = s.UnifiUpdaterIntervalSeconds;
         _updateConnectionFieldsWhenOnline = s.UnifiUpdateConnectionFieldsWhenOnline;
@@ -118,6 +123,56 @@ public sealed class UnifiOnlineStatusUpdater : BackgroundService
         _logger.LogInformation(
             "UniFi updater settings applied: Enabled={Enabled}, Interval={Interval}s, UpdateConnectionFields={UpdateConn}",
             _enabled, _intervalSeconds, _updateConnectionFieldsWhenOnline);
+
+        if (!wasEnabled && _enabled && _intervalSeconds > 0)
+        {
+            ScheduleEnableTransitionRun();
+        }
+        else if (!_enabled || _intervalSeconds <= 0)
+        {
+            CancelEnableTransitionRun();
+        }
+    }
+
+    private void ScheduleEnableTransitionRun()
+    {
+        CancellationTokenSource cts;
+        lock (_enableTriggerLock)
+        {
+            _enableTriggerCts?.Cancel();
+            _enableTriggerCts?.Dispose();
+            _enableTriggerCts = new CancellationTokenSource();
+            cts = _enableTriggerCts;
+        }
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(EnableTransitionDelaySeconds), cts.Token);
+                if (_enabled && _intervalSeconds > 0 && !cts.Token.IsCancellationRequested)
+                {
+                    _logger.LogInformation(
+                        "UniFi updater enabled. Triggering first run after {DelaySeconds}s warm-up.",
+                        EnableTransitionDelaySeconds);
+                    _control.TriggerNow();
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // expected when updater is disabled before delayed run fires
+            }
+        }, cts.Token);
+    }
+
+    private void CancelEnableTransitionRun()
+    {
+        lock (_enableTriggerLock)
+        {
+            _enableTriggerCts?.Cancel();
+            _enableTriggerCts?.Dispose();
+            _enableTriggerCts = null;
+        }
     }
 
     private async Task RunOnce(CancellationToken ct)
@@ -419,6 +474,9 @@ public sealed class UnifiOnlineStatusUpdater : BackgroundService
 
         foreach (var u in unifiClients)
         {
+            if (!u.IsOnline)
+                continue;
+
             var mac = UnifiParsers.NormalizeMac(u.Mac);
             if (knownMacs.Contains(mac) || ignoredSet.Contains(mac) || openDiscoverySet.Contains(mac))
                 continue;
@@ -466,6 +524,7 @@ public sealed class UnifiOnlineStatusUpdater : BackgroundService
 
         // Decide who needs ping (UniFi says offline) or custom monitor checks
         var finalOnline = new Dictionary<int, bool>(devices.Count);
+        var statusSourceByDeviceId = new Dictionary<int, string>(devices.Count);
 
         var customMonitor = devices
             .Where(d => d.IsStatusTracked && d.MonitorMode != DeviceMonitorMode.Normal)
@@ -484,13 +543,21 @@ public sealed class UnifiOnlineStatusUpdater : BackgroundService
                 ? null
                 : UnifiParsers.NormalizeMac(d.MacAddress!);
 
-            if (mac is not null && onlineMap.TryGetValue(mac, out _))
+            // Prefer explicit infra "connected" state from UniFi /devices when available.
+            if (mac is not null && infraByMac.TryGetValue(mac, out var infraStatus) && infraStatus.IsOnline)
             {
                 finalOnline[d.Id] = true;
+                statusSourceByDeviceId[d.Id] = "InfraConnected";
+            }
+            else if (mac is not null && onlineMap.TryGetValue(mac, out _))
+            {
+                finalOnline[d.Id] = true;
+                statusSourceByDeviceId[d.Id] = "ActiveClient";
             }
             else
             {
                 toPing.Add(d);
+                statusSourceByDeviceId[d.Id] = "PingFallback";
             }
         }
 
@@ -513,7 +580,10 @@ public sealed class UnifiOnlineStatusUpdater : BackgroundService
             });
 
             foreach (var t in await Task.WhenAll(monitorTasks))
+            {
                 finalOnline[t.Id] = t.alive;
+                statusSourceByDeviceId[t.Id] = "CustomMonitor";
+            }
         }
 
         // Ping pass with limited concurrency
@@ -536,7 +606,10 @@ public sealed class UnifiOnlineStatusUpdater : BackgroundService
             });
 
             foreach (var t in await Task.WhenAll(pingTasks))
+            {
                 finalOnline[t.Id] = t.alive;
+                statusSourceByDeviceId[t.Id] = "Ping";
+            }
         }
 
         foreach (var d in devices)
@@ -560,6 +633,11 @@ public sealed class UnifiOnlineStatusUpdater : BackgroundService
 
             var wasOnline = d.IsOnline;
             var isNowOnline = finalOnline.TryGetValue(d.Id, out var v) && v;
+            var statusSource = statusSourceByDeviceId.TryGetValue(d.Id, out var source) ? source : "Unknown";
+
+            _logger.LogDebug(
+                "Status resolve: DeviceId={DeviceId}, Name={Name}, Mac={Mac}, Source={Source}, Previous={Previous}, Current={Current}",
+                d.Id, d.Name, d.MacAddress, statusSource, wasOnline ? "Online" : "Offline", isNowOnline ? "Online" : "Offline");
 
             if (wasOnline != isNowOnline)
                 changedCount++;
@@ -760,15 +838,22 @@ public sealed class UnifiOnlineStatusUpdater : BackgroundService
 
         _control.NotifyStatusChanged(); // NEW: push UI refresh
 
+        var sourceSummary = statusSourceByDeviceId
+            .GroupBy(kv => kv.Value)
+            .OrderBy(g => g.Key, StringComparer.Ordinal)
+            .Select(g => $"{g.Key}={g.Count()}")
+            .ToList();
+
         _logger.LogInformation(
-            "UniFi status updater completed. Changed={Count}. UnifiOfflinePinged={Pinged}.",
-            changedCount, toPing.Count);
+            "UniFi status updater completed. Changed={Count}. UnifiOfflinePinged={Pinged}. StatusSources=[{Sources}]",
+            changedCount, toPing.Count, string.Join(", ", sourceSummary));
     }
 
 
     public override Task StopAsync(CancellationToken cancellationToken)
     {
         _settingsService.SettingsChanged -= OnSettingsChanged;
+        CancelEnableTransitionRun();
         return base.StopAsync(cancellationToken);
     }
 
