@@ -5,26 +5,33 @@ No cloud required, installs easily with Docker.
 
 More information on Netipam can be found at https://netipam.com
 
+## Installation in Linux (Ubuntu/Debian)
+
+Installer provides options to install, update or uninstall 
+
+`wget https://github.com/nodeplex/Netipam/releases/download/v0.8.6/install-netipam.sh`<br>
+`sudo bash install-netipam.sh`<br>
+
+
 ## Installation in Docker
 
 Prereqs: Docker + Docker Compose.
 
 #### Create a folder and add the compose file:
 
-  If you store your Docker containers in a different folder, adjust the /opt below accordingly
+  If you store your Docker containers in a different folder, adjust the `/opt` below accordingly
   
-  mkdir -p /opt/netipam<br>
+  `mkdir -p /opt/netipam`<br>
   Save docker-compose.yml in /opt/netipam<br>
 
 #### Start the container:
 
-  cd /opt/netipam<br>
-  docker compose up -d<br>
+  `cd /opt/netipam`<br>
+  `docker compose up -d`<br>
 
 #### Open the app:
 
-  Open Netipam:<br>
-  host-ip:7088 (xx.xx.xx.xx:7088)
+`http://<host-ip>:7088`
 
 ## Synology (Container Manager)
 
@@ -38,7 +45,7 @@ Open Container Manager → Projects → Create.<br>
 Select the folder and compose file (or upload it), then deploy.<br>
 
 Open Netipam:<br> 
-nas-ip:7088 (xx.xx.xx.xx:7088)<br>
+`http://<nas-ip>:7088`<br>
 
 ### Port choice
 
