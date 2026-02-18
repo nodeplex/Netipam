@@ -7,7 +7,7 @@ More information on Netipam can be found at https://netipam.com
 
 # Installation
 
-## Linux (Ubuntu/Debian)
+## Linux (Ubuntu/Debian/RockyLinux/AlmaLinux/RHEL/CentOS/Fedora)
 
 Installer provides options to install, update or uninstall 
 
