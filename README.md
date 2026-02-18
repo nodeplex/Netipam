@@ -1,11 +1,13 @@
 # Netipam
 
 Netipam is a UniFi-centric, self-hosted IP address management and network visibility tool designed for networks from homelabs to small business.
-No cloud required, installs easily with Docker.
+No cloud required, installs easily in Docker or Linux.
 
 More information on Netipam can be found at https://netipam.com
 
-## Installation in Linux (Ubuntu/Debian)
+# Installation
+
+## Linux (Ubuntu/Debian)
 
 Installer provides options to install, update or uninstall 
 
@@ -13,7 +15,7 @@ Installer provides options to install, update or uninstall
 `sudo bash install-netipam.sh`<br>
 
 
-## Installation in Docker
+## Docker
 
 Prereqs: Docker + Docker Compose.
 
