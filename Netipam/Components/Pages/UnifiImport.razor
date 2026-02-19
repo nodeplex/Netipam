@@ -8,6 +8,7 @@
 @using Microsoft.AspNetCore.Components.Authorization
 
 @inject AppDbContext DbContext
+@inject AppSettingsService SettingsService
 @inject ISnackbar Snackbar
 @inject UnifiApiClient Unifi
 @inject UnifiUpdaterControl UpdaterControl
@@ -621,6 +622,8 @@ public void Dispose()
 
             var deviceNameMap = UnifiParsers.BuildDeviceNameMap(devicesDoc);
             var incoming = UnifiParsers.MergeClients(activeDoc, knownDoc, deviceNameMap);
+            var settings = await SettingsService.LoadAsync();
+            incoming = ApplyKnownClientCutoff(incoming, settings.UnifiKnownClientCutoffDays, out var filteredCount);
 
             var existing = await DbContext.Devices.AsNoTracking().ToListAsync();
             var existingByMac = existing
@@ -670,7 +673,9 @@ public void Dispose()
                 });
             }
 
-            clientStatus = $"Loaded {clientRows.Count} clients.";
+            clientStatus = settings.UnifiKnownClientCutoffDays > 0
+                ? $"Loaded {clientRows.Count} clients. Filtered out {filteredCount} stale known clients (> {settings.UnifiKnownClientCutoffDays} days)."
+                : $"Loaded {clientRows.Count} clients.";
         }
         catch (Exception ex)
         {
@@ -1533,6 +1538,8 @@ private async Task<List<IncomingUnifiClient>> FetchUnifiClientsAsync()
 
     var deviceNameMap = UnifiParsers.BuildDeviceNameMap(devicesDoc);
     var merged = UnifiParsers.MergeClients(activeDoc, knownDoc, deviceNameMap);
+    var settings = await SettingsService.LoadAsync();
+    merged = ApplyKnownClientCutoff(merged, settings.UnifiKnownClientCutoffDays, out _);
 
     return merged.Select(c => new IncomingUnifiClient
     {
@@ -1711,6 +1718,25 @@ private sealed class SubnetPreviewRow
     public int? VlanId { get; set; }
     public string? Dns1 { get; set; }
     public string? Dns2 { get; set; }
+}
+
+private static List<UnifiParsers.UnifiClient> ApplyKnownClientCutoff(
+    List<UnifiParsers.UnifiClient> clients,
+    int cutoffDays,
+    out int filteredCount)
+{
+    if (cutoffDays <= 0)
+    {
+        filteredCount = 0;
+        return clients;
+    }
+
+    var cutoffUtc = DateTime.UtcNow.AddDays(-cutoffDays);
+    var filtered = clients
+        .Where(c => c.IsOnline || c.LastSeenUtc is null || c.LastSeenUtc.Value >= cutoffUtc)
+        .ToList();
+    filteredCount = clients.Count - filtered.Count;
+    return filtered;
 }
 
 private sealed class ClientPreviewRow

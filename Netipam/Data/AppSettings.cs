@@ -16,6 +16,7 @@ public sealed class AppSetting
     public bool UnifiSyncHostname { get; set; } = false;
     public bool UnifiSyncManufacturer { get; set; } = false;
     public bool UnifiSyncModel { get; set; } = false;
+    public int UnifiKnownClientCutoffDays { get; set; } = 60;
 
     // UniFi connection details (DB-backed settings)
     public string? UnifiBaseUrl { get; set; }         // e.g. https://unifi.local:8443

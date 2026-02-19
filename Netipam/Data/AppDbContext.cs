@@ -70,6 +70,7 @@ public class AppDbContext : IdentityDbContext<ApplicationUser>
             entity.Property(x => x.UnifiSyncHostname).HasDefaultValue(false);
             entity.Property(x => x.UnifiSyncManufacturer).HasDefaultValue(false);
             entity.Property(x => x.UnifiSyncModel).HasDefaultValue(false);
+            entity.Property(x => x.UnifiKnownClientCutoffDays).HasDefaultValue(60);
 
             // ---- UniFi connection (DB-backed) ----
             entity.Property(x => x.UnifiBaseUrl).HasMaxLength(255);

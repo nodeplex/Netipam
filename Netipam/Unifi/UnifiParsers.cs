@@ -24,6 +24,7 @@ public static class UnifiParsers
         string? Model,
         string? OperatingSystem,
         bool IsOnline,
+        DateTime? LastSeenUtc,
         string? ConnectionType,
         string? UpstreamDeviceName,
         string? UpstreamDeviceMac,
@@ -304,6 +305,7 @@ public static class UnifiParsers
                 : (!string.IsNullOrWhiteSpace(ip)
                     ? ip
                     : (!string.IsNullOrWhiteSpace(lastIp) ? lastIp : fixedIp));
+            var lastSeenUtc = ParseUnixTimestampToUtc(c, "last_seen");
 
             var (mfg, model, os) = ParseDeviceHints(c);
 
@@ -316,6 +318,7 @@ public static class UnifiParsers
                 model,
                 os,
                 IsOnline: false,
+                LastSeenUtc: lastSeenUtc,
                 ConnectionType: null,
                 UpstreamDeviceName: null,
                 UpstreamDeviceMac: null,
@@ -365,6 +368,7 @@ public static class UnifiParsers
                     Model = mergedModel,
                     OperatingSystem = mergedOs,
                     IsOnline = true,
+                    LastSeenUtc = DateTime.UtcNow,
 
                     ConnectionType = !string.IsNullOrWhiteSpace(connType) ? connType : existing.ConnectionType,
                     UpstreamDeviceName = !string.IsNullOrWhiteSpace(upstreamName) ? upstreamName : existing.UpstreamDeviceName,
@@ -384,6 +388,7 @@ public static class UnifiParsers
                     model,
                     os,
                     IsOnline: true,
+                    LastSeenUtc: DateTime.UtcNow,
                     ConnectionType: connType,
                     UpstreamDeviceName: upstreamName,
                     UpstreamDeviceMac: upstreamMac,
@@ -597,6 +602,33 @@ public static class UnifiParsers
             JsonValueKind.Number => p.TryGetInt32(out var i) ? (i != 0) : null,
             _ => null
         };
+    }
+
+    private static DateTime? ParseUnixTimestampToUtc(JsonElement obj, string prop)
+    {
+        if (obj.ValueKind != JsonValueKind.Object)
+            return null;
+
+        if (!obj.TryGetProperty(prop, out var p))
+            return null;
+
+        long? seconds = null;
+        if (p.ValueKind == JsonValueKind.Number && p.TryGetInt64(out var n))
+            seconds = n;
+        else if (p.ValueKind == JsonValueKind.String && long.TryParse(p.GetString(), out var s))
+            seconds = s;
+
+        if (seconds is null || seconds <= 0)
+            return null;
+
+        try
+        {
+            return DateTimeOffset.FromUnixTimeSeconds(seconds.Value).UtcDateTime;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static (string? Manufacturer, string? Model, string? Os) ParseDeviceHints(JsonElement obj)

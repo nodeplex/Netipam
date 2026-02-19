@@ -35,6 +35,7 @@ public sealed class AppSettingsService
         {
             s.UnifiAuthMode = NormalizeUnifiAuthMode(s.UnifiAuthMode);
             s.ProxmoxIntervalSeconds = NormalizeProxmoxIntervalSeconds(s.ProxmoxIntervalSeconds);
+            s.UnifiKnownClientCutoffDays = NormalizeKnownClientCutoffDays(s.UnifiKnownClientCutoffDays);
             return s;
         }
 
@@ -61,6 +62,7 @@ public sealed class AppSettingsService
             UnifiSyncHostname = false,
             UnifiSyncManufacturer = false,
             UnifiSyncModel = false,
+            UnifiKnownClientCutoffDays = 60,
             UnifiAuthMode = "Session",
 
             ProxmoxEnabled = false,
@@ -90,6 +92,7 @@ public sealed class AppSettingsService
                           ?? await EnsureSingletonRowAsync(db, ct);
 
             mutate(current);
+            current.UnifiKnownClientCutoffDays = NormalizeKnownClientCutoffDays(current.UnifiKnownClientCutoffDays);
             // Always keep tooltips enabled.
             current.ShowLastSeenTooltips = true;
             await db.SaveChangesAsync(ct);
@@ -128,6 +131,7 @@ public sealed class AppSettingsService
             current.UnifiSyncHostname = incoming.UnifiSyncHostname;
             current.UnifiSyncManufacturer = incoming.UnifiSyncManufacturer;
             current.UnifiSyncModel = incoming.UnifiSyncModel;
+            current.UnifiKnownClientCutoffDays = NormalizeKnownClientCutoffDays(incoming.UnifiKnownClientCutoffDays);
 
             current.UnifiBaseUrl = incoming.UnifiBaseUrl;
             current.UnifiSiteName = incoming.UnifiSiteName;
@@ -181,6 +185,8 @@ public sealed class AppSettingsService
 
     private static int NormalizeProxmoxIntervalSeconds(int value)
         => value <= 0 ? 300 : Math.Clamp(value, 30, 86400);
+    private static int NormalizeKnownClientCutoffDays(int value)
+        => value <= 0 ? 0 : Math.Clamp(value, 1, 3650);
 
     private static async Task<AppSetting> EnsureSingletonRowAsync(AppDbContext db, CancellationToken ct)
     {
@@ -203,6 +209,7 @@ public sealed class AppSettingsService
             UnifiSyncHostname = false,
             UnifiSyncManufacturer = false,
             UnifiSyncModel = false,
+            UnifiKnownClientCutoffDays = 60,
             UnifiAuthMode = "Session",
             ProxmoxEnabled = false,
             ProxmoxIntervalSeconds = 300,

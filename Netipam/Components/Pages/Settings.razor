@@ -186,6 +186,20 @@ else
                 </MudText>
             </MudItem>
 
+            <MudItem xs="12" sm="6" md="4">
+                <MudNumericField T="int"
+                                 Label="Known client cutoff (days)"
+                                 Min="0"
+                                 Max="3650"
+                                 Step="1"
+                                 Immediate="true"
+                                 @bind-Value="model.UnifiKnownClientCutoffDays"
+                                 @bind-Value:after="OnKnownClientCutoffAfter" />
+                <MudText Typo="Typo.caption" Class="mt-1">
+                    Import only known/offline UniFi clients seen within this many days. `0` disables the cutoff.
+                </MudText>
+            </MudItem>
+
             <MudItem xs="12">
                 <MudText Typo="Typo.subtitle2">Sync fields</MudText>
                 <MudText Typo="Typo.caption">
@@ -724,10 +738,22 @@ else
         await SettingsService.UpdateAsync(s => s.UnifiUpdaterIntervalSeconds = model.UnifiUpdaterIntervalSeconds);
     }
 
+    private async Task OnKnownClientCutoffAfter()
+    {
+        model.UnifiKnownClientCutoffDays = model.UnifiKnownClientCutoffDays <= 0
+            ? 0
+            : Math.Clamp(model.UnifiKnownClientCutoffDays, 1, 3650);
+
+        await SettingsService.UpdateAsync(s => s.UnifiKnownClientCutoffDays = model.UnifiKnownClientCutoffDays);
+    }
+
     private async Task SaveAfterEdit()
     {
         if (model.UnifiUpdaterIntervalSeconds > 0)
             model.UnifiUpdaterIntervalSeconds = Math.Max(MinUnifiIntervalSeconds, model.UnifiUpdaterIntervalSeconds);
+        model.UnifiKnownClientCutoffDays = model.UnifiKnownClientCutoffDays <= 0
+            ? 0
+            : Math.Clamp(model.UnifiKnownClientCutoffDays, 1, 3650);
 
         model.ThemeName = MainLayout.NormalizeThemeName(model.ThemeName);
 
