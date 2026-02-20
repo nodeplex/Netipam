@@ -11,8 +11,8 @@ More information on Netipam can be found at https://netipam.com
 
 Installer provides options to install, update or uninstall 
 
-`wget https://github.com/nodeplex/Netipam/releases/download/v0.8.6/install-netipam.sh`<br>
-`sudo bash install-netipam.sh`<br>
+`wget https://github.com/nodeplex/Netipam/releases/download/v0.8.7/install-netipam-0.8.7.sh`<br>
+`sudo bash install-netipam-0.8.7.sh`<br>
 
 
 ## Docker
