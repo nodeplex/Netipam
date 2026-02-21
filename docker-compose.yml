@@ -2,6 +2,7 @@ services:
   netipam:
     image: nodeplex/netipam:latest
     container_name: netipam
+    restart: unless-stopped
     ports:
       - "7088:7088"
     environment:
